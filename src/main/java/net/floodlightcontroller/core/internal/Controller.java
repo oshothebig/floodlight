@@ -17,7 +17,6 @@
 
 package net.floodlightcontroller.core.internal;
 
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -32,7 +31,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Properties;
 import java.util.Set;
 import java.util.Stack;
 import java.util.concurrent.BlockingQueue;
@@ -48,8 +46,8 @@ import java.util.concurrent.TimeoutException;
 
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
+import net.floodlightcontroller.core.IHARoleListener;
 import net.floodlightcontroller.core.IInfoProvider;
-import net.floodlightcontroller.core.IOFController;
 import net.floodlightcontroller.core.IOFMessageListener;
 import net.floodlightcontroller.core.IOFMessageListener.Command;
 import net.floodlightcontroller.core.IOFSwitch;
@@ -129,8 +127,7 @@ import org.slf4j.LoggerFactory;
 /**
  * The main controller class.  Handles all setup and network listeners
  */
-public class Controller
-    implements IFloodlightProviderService, IOFController {
+public class Controller implements IFloodlightProviderService {
     
     protected static Logger log = LoggerFactory.getLogger(Controller.class);
     
@@ -148,6 +145,7 @@ public class Controller
     protected ConcurrentHashMap<Long, IOFSwitch> connectedSwitches;
     
     protected Set<IOFSwitchListener> switchListeners;
+    protected Set<IHARoleListener> haListeners;
     protected Map<String, List<IInfoProvider>> providerMap;
     protected BlockingQueue<Update> updates;
     
@@ -161,6 +159,7 @@ public class Controller
     // Configuration options
     protected int openFlowPort = 6633;
     protected int workerThreads = 0;
+    protected String controllerId = "localhost";
     
     // The current role of the controller.
     // If the controller isn't configured to support roles, then this is null.
@@ -201,13 +200,26 @@ public class Controller
     protected static final int BATCH_MAX_SIZE = 100;
     protected static final boolean ALWAYS_DECODE_ETH = true;
 
+    protected enum UpdateType {
+        SWITCH, HA
+    }
     protected class Update {
+        public UpdateType type;
         public IOFSwitch sw;
         public boolean added;
+        public Role oldRole;
+        public Role newRole;
 
         public Update(IOFSwitch sw, boolean added) {
             this.sw = sw;
             this.added = added;
+            this.type = UpdateType.SWITCH;
+        }
+        
+        public Update(Role newRole, Role oldRole) {
+            this.oldRole = oldRole;
+            this.newRole = newRole;
+            this.type = UpdateType.HA;
         }
     }
     
@@ -242,6 +254,8 @@ public class Controller
     
     @Override
     public synchronized void setRole(Role role) {
+        if (role == null) throw new NullPointerException("Role can not be null.");
+        Role oldRole = this.role;
         this.role = role;
         
         // Send role request messages to all of the connected switches.
@@ -257,6 +271,9 @@ public class Controller
                 log.error("Error sending role request message to switch {}", sw);
             }
         }
+        
+        // Enqueue an update for our listeners.
+        this.updates.add(new Update(role, oldRole));
     }
     
     /**
@@ -938,6 +955,13 @@ public class Controller
         switch (m.getType()) {
             case PACKET_IN:
                 OFPacketIn pi = (OFPacketIn)m;
+                
+                if (pi.getPacketData().length <= 0) {
+                    log.error("Ignoring PacketIn (Xid = " + pi.getXid() + 
+                              ") because the data field is empty.");
+                    return;
+                }
+                
                 if (Controller.ALWAYS_DECODE_ETH) {
                     eth = new Ethernet();
                     eth.deserialize(pi.getPacketData(), 0,
@@ -986,15 +1010,12 @@ public class Controller
                         pktinProcTime.recordStartTimeComp(listener);
                         cmd = listener.receive(sw, m, bc);
                         pktinProcTime.recordEndTimeComp(listener);
-                            //updateCumulativeTimeOneComp(compStartTime_ns,
-                            //                            listener.getId());
                         
                         if (Command.STOP.equals(cmd)) {
                             break;
                         }
                     }
                     pktinProcTime.recordEndTimePktIn(sw, m, bc);
-                    //updateCumulativeTimeTotal(startTime_ns);
                 } else {
                     log.error("Unhandled OF Message: {} from {}", m, sw);
                 }
@@ -1363,13 +1384,9 @@ public class Controller
         return factory;
     }
     
-    // *************
-    // IOFController
-    // *************
-    
     @Override
     public String getControllerId() {
-        return "localhost";
+        return controllerId;
     }
     
     // **************
@@ -1521,25 +1538,13 @@ public class Controller
         storageSource.deleteRowAsync(PORT_TABLE_NAME, id);
     }
 
-    protected Role getInitialRole() {
-        // FIXME: This code should be changed to get the settings from
-        // the property file used by the module loader once Alex has
-        // that code written instead of using system properties.
+    /**
+     * Sets the role based on a string.
+     * @param roleString The role string
+     * @return The role is a valid string is passed, nulll otherwise
+     */
+    protected Role getInitialRole(String roleString) {
         Role role = null;
-        String roleString = System.getProperty("floodlight.role");
-        if (roleString == null) {
-            String rolePath = System.getProperty("floodlight.role.path");
-            if (rolePath != null) {
-                Properties properties = new Properties();
-                try {
-                    properties.load(new FileInputStream(rolePath));
-                    roleString = properties.getProperty("floodlight.role");
-                }
-                catch (IOException exc) {
-                    log.error("Error reading current role value from file: {}", rolePath);
-                }
-            }
-        }
         
         if (roleString != null) {
             // Canonicalize the string to the form used for the enum constants
@@ -1552,6 +1557,7 @@ public class Controller
             }
         }
         
+        log.info("Controller roles set to {}", role);
         return role;
     }
     
@@ -1584,15 +1590,35 @@ public class Controller
         while (true) {
             try {
                 Update update = updates.take();
-                log.debug("Dispatching switch update {} {}",
-                          update.sw, update.added);
-                if (switchListeners != null) {
-                    for (IOFSwitchListener listener : switchListeners) {
-                        if (update.added)
-                            listener.addedSwitch(update.sw);
-                        else
-                            listener.removedSwitch(update.sw);
-                    }
+                switch (update.type) {
+                    case SWITCH:
+                        if (log.isDebugEnabled()) {
+                            log.debug("Dispatching switch update {} {}",
+                                      update.sw, update.added);
+                        }
+                        if (switchListeners != null) {
+                            for (IOFSwitchListener listener : switchListeners) {
+                                if (update.added)
+                                    listener.addedSwitch(update.sw);
+                                else
+                                    listener.removedSwitch(update.sw);
+                            }
+                        }
+                        break;
+                    case HA:
+                        if (log.isDebugEnabled()) {
+                            log.debug("Dispatching HA update newRole = {}, oldRole = {}",
+                                      update.newRole, update.oldRole);
+                        }
+                        if (haListeners != null) {
+                            for (IHARoleListener listener : haListeners) {
+                                    listener.roleChanged(update.oldRole, update.newRole);
+                            }
+                        }
+                        break;
+                    default:
+                        log.error("Unreognized update type " + update.type);
+                        break;
                 }
             } catch (InterruptedException e) {
                 return;
@@ -1602,7 +1628,8 @@ public class Controller
                           e, StackTraceUtil.stackTraceToString(e));
                 return;
             } catch (Exception e) {
-                log.error("Exception in controller updates loop {} {}", e, StackTraceUtil.stackTraceToString(e));
+                log.error("Exception in controller updates loop {} {}", 
+                          e, StackTraceUtil.stackTraceToString(e));
             }
         }
     }
@@ -1632,6 +1659,11 @@ public class Controller
             this.workerThreads = Integer.parseInt(threads);
         }
         log.info("Number of worker threads port set to {}", this.workerThreads);
+        String controllerId = configParams.get("controllerid");
+        if (controllerId != null) {
+            this.controllerId = controllerId;
+        }
+        log.info("ControllerId set to {}", this.controllerId);
     }
 
     private void initVendorMessages() {
@@ -1663,13 +1695,14 @@ public class Controller
                                       ListenerDispatcher<OFType, 
                                                          IOFMessageListener>>();
         this.switchListeners = new CopyOnWriteArraySet<IOFSwitchListener>();
+        this.haListeners = new CopyOnWriteArraySet<IHARoleListener>();
         this.activeSwitches = new ConcurrentHashMap<Long, IOFSwitch>();
         this.connectedSwitches = new ConcurrentHashMap<Long, IOFSwitch>();
         this.updates = new LinkedBlockingQueue<Update>();
         this.factory = new BasicFactory();
         this.providerMap = new HashMap<String, List<IInfoProvider>>();
         setConfigParams(configParams);
-        this.setRole(getInitialRole());
+        this.role = getInitialRole(configParams.get("role"));
         initVendorMessages();
     }
     
@@ -1735,4 +1768,14 @@ public class Controller
 		
 		return result;
 	}
+
+    @Override
+    public void addHAListener(IHARoleListener listener) {
+        this.haListeners.add(listener);
+    }
+
+    @Override
+    public void removeHAListener(IHARoleListener listener) {
+        this.haListeners.remove(listener);
+    }
 }
