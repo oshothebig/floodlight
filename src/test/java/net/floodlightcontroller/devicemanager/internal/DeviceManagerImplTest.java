@@ -297,7 +297,7 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         expect(mockTopology.isInternal(1L, (short)1)).andReturn(false);
         deviceManager.setTopology(mockTopology);
 
-        // reduce the aging period to a few milliseconds
+        // reduce the aging period to a few seconds
         DeviceManagerImpl.DEVICE_AP_MAX_AGE = 1;
         DeviceManagerImpl.DEVICE_NA_MAX_AGE = 1;
         DeviceManagerImpl.DEVICE_MAX_AGE = 2;
@@ -333,12 +333,15 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         assertEquals(2, rdevice.getAttachmentPoints().size());
         assertEquals(2, rdevice.getNetworkAddresses().size());
 
-        // Sleep to make sure the aging thread has run
-        Thread.sleep(Math.max(DeviceManagerImpl.DEVICE_NA_MAX_AGE, DeviceManagerImpl.DEVICE_AP_MAX_AGE)*1000);
-        deviceManager.removeAgedDevices(new Date());
+        // Wait until device's network address expired.
+        Date boundaryTime = new Date(new Date().getTime() + DeviceManagerImpl.DEVICE_MAX_AGE*1000);
+        while (deviceManager.getDeviceByDataLayerAddress(dataLayerSource).getNetworkAddresses().size() != 0) {
+        	Date curTime = new Date();
+        	assertFalse(curTime.after(boundaryTime));
+        	deviceManager.removeAgedDevices(curTime);
+        }
 
         rdevice = deviceManager.getDeviceByDataLayerAddress(dataLayerSource);
-
         assertEquals(0, rdevice.getNetworkAddresses().size());
 
         // Make sure the device's AP and NA were removed from storage
@@ -347,13 +350,14 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         assertEquals(0, rdevice.getAttachmentPoints().size());
         assertEquals(0, rdevice.getNetworkAddresses().size());
 
-        // Sleep a bit longer seconds to allow device age
-        Thread.sleep((DeviceManagerImpl.DEVICE_MAX_AGE - 
-        		Math.max(DeviceManagerImpl.DEVICE_NA_MAX_AGE, DeviceManagerImpl.DEVICE_AP_MAX_AGE))*1000);
-        deviceManager.removeAgedDevices(new Date());
-
-        assertNull(deviceManager.getDeviceByDataLayerAddress(dataLayerSource));
-
+        // Wait until device expired.
+        boundaryTime = new Date(new Date().getTime() + DeviceManagerImpl.DEVICE_MAX_AGE*1000);
+        while (deviceManager.getDeviceByDataLayerAddress(dataLayerSource) != null) {
+        	Date curTime = new Date();
+        	assertFalse(curTime.after(boundaryTime));
+        	deviceManager.removeAgedDevices(curTime);
+        }
+ 
         // Make sure the device's AP and NA were removed from storage
         deviceManager.readAllDeviceStateFromStorage();
         assertNull(deviceManager.getDeviceByDataLayerAddress(dataLayerSource));

@@ -67,7 +67,6 @@ import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.IPv4;
 import net.floodlightcontroller.packet.LLDP;
 import net.floodlightcontroller.packet.LLDPTLV;
-import net.floodlightcontroller.restserver.IRestApiService;
 import net.floodlightcontroller.routing.IRoutingService;
 import net.floodlightcontroller.storage.IResultSet;
 import net.floodlightcontroller.storage.IStorageSourceService;
@@ -75,7 +74,6 @@ import net.floodlightcontroller.storage.IStorageSourceListener;
 import net.floodlightcontroller.storage.OperatorPredicate;
 import net.floodlightcontroller.storage.StorageException;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
-import net.floodlightcontroller.topology.web.TopologyWebRoutable;
 import net.floodlightcontroller.util.EventHistory;
 import net.floodlightcontroller.util.EventHistory.EvAction;
 import net.floodlightcontroller.util.StackTraceUtil;
@@ -143,7 +141,6 @@ public class LinkDiscoveryManager
     protected IFloodlightProviderService floodlightProvider;
     protected IStorageSourceService storageSource;
     protected IRoutingService routingEngine;
-    protected IRestApiService restApi;
     protected IThreadPoolService threadPool;
     
     private static final byte[] LLDP_STANDARD_DST_MAC_STRING = 
@@ -165,6 +162,7 @@ public class LinkDiscoveryManager
      * Map from a id:port to the set of links containing it as an endpoint
      */
     protected Map<SwitchPortTuple, Set<LinkTuple>> portLinks;
+    protected Set<SwitchPortTuple> suppressLLDPs;
 
     /**
      * Set of link tuples over which multicast LLDPs are received
@@ -197,6 +195,20 @@ public class LinkDiscoveryManager
     public Map<SwitchPortTuple, Set<LinkTuple>> getPortLinks() {
         return portLinks;
     }
+    
+    public Set<SwitchPortTuple> getSuppressLLDPsInfo() {
+    	return suppressLLDPs;
+    }
+    
+    public void AddToSuppressLLDPs(IOFSwitch sw, short port)
+    {
+    	this.suppressLLDPs.add(new SwitchPortTuple(sw, port));
+    }
+    
+    public void RemoveFromSuppressLLDPs(IOFSwitch sw, short port) 
+    {
+    	this.suppressLLDPs.remove(new SwitchPortTuple(sw, port));
+    }
 
     public boolean isShuttingDown() {
         return shuttingDown;
@@ -227,6 +239,13 @@ public class LinkDiscoveryManager
     }
 
     protected void sendLLDPs(IOFSwitch sw, OFPhysicalPort port, boolean isStandard) {
+    	
+    	if (this.suppressLLDPs.contains(new SwitchPortTuple(sw, port.getPortNumber()))) {
+    		/* Dont send LLDPs out of this port as suppressLLDPs set
+    		 * 
+    		 */
+    		return;
+    	}
 
         if (log.isTraceEnabled()) {
             log.trace("Sending LLDP packet out of swich: {}, port: {}",
@@ -1291,8 +1310,6 @@ public class LinkDiscoveryManager
                         IFloodlightService>();
         // We are the class that implements the service
         m.put(ILinkDiscoveryService.class, this);
-        //m.put(ITopologyService.class, this);
-        
         return m;
     }
 
@@ -1303,7 +1320,6 @@ public class LinkDiscoveryManager
         l.add(IFloodlightProviderService.class);
         l.add(IStorageSourceService.class);
         l.add(IRoutingService.class);
-        l.add(IRestApiService.class);
         l.add(IThreadPoolService.class);
         return l;
     }
@@ -1314,7 +1330,6 @@ public class LinkDiscoveryManager
         floodlightProvider = context.getServiceImpl(IFloodlightProviderService.class);
         storageSource = context.getServiceImpl(IStorageSourceService.class);
         routingEngine = context.getServiceImpl(IRoutingService.class);
-        restApi = context.getServiceImpl(IRestApiService.class);
         threadPool = context.getServiceImpl(IThreadPoolService.class);
         
         // We create this here because there is no ordering guarantee
@@ -1323,6 +1338,7 @@ public class LinkDiscoveryManager
         this.updates = new LinkedBlockingQueue<LDUpdate>();
         this.links = new HashMap<LinkTuple, LinkInfo>();
         this.portLinks = new HashMap<SwitchPortTuple, Set<LinkTuple>>();
+        this.suppressLLDPs = new HashSet<SwitchPortTuple>();
         this.portBroadcastDomainLinks = new HashMap<SwitchPortTuple, Set<LinkTuple>>();
         this.switchLinks = new HashMap<IOFSwitch, Set<LinkTuple>>();
         this.evHistTopologySwitch =
@@ -1417,13 +1433,6 @@ public class LinkDiscoveryManager
         floodlightProvider.addOFSwitchListener(this);
         floodlightProvider.addHAListener(this);
         floodlightProvider.addInfoProvider("summary", this);
-        
-        // init our rest api
-        if (restApi != null) {
-            restApi.addRestletRoutable(new TopologyWebRoutable());
-        } else {
-            log.error("Could not instantiate REST API");
-        }
 
         setControllerTLV();
     }

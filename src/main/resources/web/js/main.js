@@ -49,7 +49,7 @@ var AppRouter = Backbone.Router.extend({
     topology:function () {
     	console.log("switching to topology view");
     	var topo = new Topology();
-        $('#content').html(new TopologyView({model:topo}).render().el);
+        $('#content').html(new TopologyView({model:topo, hosts:hl}).render().el);
         // TODO factor this code out
         $('ul.nav > li').removeClass('active');
         $('li > a[href*="topology"]').parent().addClass('active');
@@ -99,8 +99,9 @@ tpl.loadTemplates(['home', 'status', 'topology', 'header', 'switch', 'switch-lis
         
         $(document).ready(function () {
             // trigger Backbone routing when clicking on links, thanks to Atinux and pbnv
+	    app.navigate("", true);
 
-        	window.document.addEventListener('click', function(e) {
+                window.document.addEventListener('click', function(e) {
         	    e = e || window.event
         	    var target = e.target || e.srcElement
         	    if ( target.nodeName.toLowerCase() === 'a' ) {
@@ -112,6 +113,7 @@ tpl.loadTemplates(['home', 'status', 'topology', 'header', 'switch', 'switch-lis
         	window.addEventListener('popstate', function(e) {
         	    app.navigate(location.pathname.substr(1), true);
         	});
+	    
         });
     });
 
