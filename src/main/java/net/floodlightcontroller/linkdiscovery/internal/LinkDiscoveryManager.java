@@ -42,7 +42,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IFloodlightProviderService.Role;
-import net.floodlightcontroller.core.IHARoleListener;
+import net.floodlightcontroller.core.IHAListener;
 import net.floodlightcontroller.core.IInfoProvider;
 import net.floodlightcontroller.core.IOFMessageListener;
 import net.floodlightcontroller.core.IOFSwitch;
@@ -76,7 +76,6 @@ import net.floodlightcontroller.storage.StorageException;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
 import net.floodlightcontroller.util.EventHistory;
 import net.floodlightcontroller.util.EventHistory.EvAction;
-import net.floodlightcontroller.util.StackTraceUtil;
 
 import org.openflow.protocol.OFMessage;
 import org.openflow.protocol.OFPacketIn;
@@ -120,7 +119,7 @@ import org.slf4j.LoggerFactory;
 public class LinkDiscoveryManager
         implements IOFMessageListener, IOFSwitchListener, 
                    IStorageSourceListener, ILinkDiscoveryService,
-                   IFloodlightModule, IInfoProvider, IHARoleListener {
+                   IFloodlightModule, IInfoProvider, IHAListener {
     protected static Logger log = LoggerFactory.getLogger(LinkDiscoveryManager.class);
 
     // Names of table/fields for links in the storage API
@@ -232,7 +231,7 @@ public class LinkDiscoveryManager
                     }
                 } 
                 catch (Exception e) {
-                    log.error("Error in link discovery updates loop: {} {}", e, StackTraceUtil.stackTraceToString(e));
+                    log.error("Error in link discovery updates loop", e);
                 }
             }
         } while (updates.peek() != null);
@@ -414,7 +413,7 @@ public class LinkDiscoveryManager
 
     @Override
     public String getName() {
-        return "topology";
+        return "linkdiscovery";
     }
     
     @Override
@@ -1019,7 +1018,6 @@ public class LinkDiscoveryManager
         }
     }
 
-
     // STORAGE METHODS
     /**
      * Deletes all links from storage
@@ -1538,4 +1536,13 @@ public class LinkDiscoveryManager
                 break;
         }
     }
+    
+    @Override
+    public void controllerNodeIPsChanged(
+            Map<String, String> curControllerNodeIPs,
+            Map<String, String> addedControllerNodeIPs,
+            Map<String, String> removedControllerNodeIPs) {
+        // ignore
+    }
+    
 }
