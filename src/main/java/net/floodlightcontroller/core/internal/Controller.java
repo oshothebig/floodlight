@@ -182,12 +182,14 @@ public class Controller implements IFloodlightProviderService,
     protected static final String SWITCH_IP = "ip";
     protected static final String SWITCH_CONTROLLER_ID = "controller_id";
     protected static final String SWITCH_ACTIVE = "active";
-    protected static final String SWITCH_CORE_SWITCH = "core_switch";
     protected static final String SWITCH_CONNECTED_SINCE = "connected_since";
     protected static final String SWITCH_CAPABILITIES = "capabilities";
     protected static final String SWITCH_BUFFERS = "buffers";
     protected static final String SWITCH_TABLES = "tables";
     protected static final String SWITCH_ACTIONS = "actions";
+
+    protected static final String SWITCH_CONFIG_TABLE_NAME = "controller_switchconfig";
+    protected static final String SWITCH_CONFIG_CORE_SWITCH = "core_switch";
     
     protected static final String PORT_TABLE_NAME = "controller_port";
     protected static final String PORT_ID = "id";
@@ -593,20 +595,20 @@ public class Controller implements IFloodlightProviderService,
                     try {
                         String swid = sw.getStringId();
                         resultSet = 
-                                storageSource.getRow(SWITCH_TABLE_NAME, swid);
+                                storageSource.getRow(SWITCH_CONFIG_TABLE_NAME, swid);
                         for (Iterator<IResultSet> it = 
                                 resultSet.iterator(); it.hasNext();) {
                             // In case of multiple rows, use the status
                             // in last row?
                             Map<String, Object> row = it.next().getRow();
-                            if (row.containsKey(SWITCH_CORE_SWITCH)) {
+                            if (row.containsKey(SWITCH_CONFIG_CORE_SWITCH)) {
                                 if (log.isDebugEnabled()) {
                                     log.debug("Reading SWITCH_IS_CORE_SWITCH " + 
                                               "config for switch={}, is-core={}",
-                                              sw, row.get(SWITCH_CORE_SWITCH));
+                                              sw, row.get(SWITCH_CONFIG_CORE_SWITCH));
                                 }
                                 String ics = 
-                                        (String)row.get(SWITCH_CORE_SWITCH);
+                                        (String)row.get(SWITCH_CONFIG_CORE_SWITCH);
                                 is_core_switch = ics.equals("true");
                             }
                         }
@@ -712,8 +714,8 @@ public class Controller implements IFloodlightProviderService,
                     // configured on the switch. This is the serial failover 
                     // mechanism from OpenFlow spec v1.0.
                     log.error("Disconnecting switch from SLAVE controller." +
-                    		" Switch {} doesn't support role request messages",
-                    		sw.getId());
+                            " Switch {} doesn't support role request messages",
+                            sw.getId());
                     sw.setConnected(false);
                     connectedSwitches.remove(sw.getId());
                     sw.getChannel().close();
@@ -772,7 +774,7 @@ public class Controller implements IFloodlightProviderService,
             }
             
             log.info("Received NX role reply message; setting role of " +
-            		"controller to {}", role.name());
+                    "controller to {}", role.name());
             
             sw.setRole(role);
             
@@ -1932,7 +1934,7 @@ public class Controller implements IFloodlightProviderService,
                            CONTROLLER_INTERFACE_TYPE, 
                            CONTROLLER_INTERFACE_NUMBER, 
                            CONTROLLER_INTERFACE_DISCOVERED_IP };
-        synchronized(curControllerNodeIPs) {
+        synchronized(controllerNodeIPsCache) {
             // We currently assume that interface Ethernet0 is the relevant
             // controller interface. Might change.
             // We could (should?) implement this using 
@@ -1981,6 +1983,18 @@ public class Controller implements IFloodlightProviderService,
             }
         }
     }
+    
+    @Override
+    public Map<String, String> getControllerNodeIPs() {
+        // We return a copy of the mapping so we can guarantee that
+        // the mapping return is the same as one that will be (or was)
+        // dispatched to IHAListeners
+        HashMap<String,String> retval = new HashMap<String,String>();
+        synchronized(controllerNodeIPsCache) {
+            retval.putAll(controllerNodeIPsCache);
+        }
+        return retval;
+    }
 
     @Override
     public void rowsModified(String tableName, Set<Object> rowKeys) {
@@ -1996,4 +2010,5 @@ public class Controller implements IFloodlightProviderService,
             handleControllerNodeIPChanges();
         }
     }
+
 }
