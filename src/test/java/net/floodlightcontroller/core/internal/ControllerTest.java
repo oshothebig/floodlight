@@ -38,7 +38,7 @@ import net.floodlightcontroller.core.IHAListener;
 import net.floodlightcontroller.core.IFloodlightProviderService.Role;
 import net.floodlightcontroller.core.IOFMessageFilterManagerService;
 import net.floodlightcontroller.core.IOFMessageListener;
-import net.floodlightcontroller.core.IOFMessageListener.Command;
+import net.floodlightcontroller.core.IListener.Command;
 import net.floodlightcontroller.core.IOFSwitch;
 import net.floodlightcontroller.core.IOFSwitchListener;
 import net.floodlightcontroller.core.OFMessageFilterManager;
@@ -694,7 +694,6 @@ public class ControllerTest extends FloodlightTestCase {
         
         // newsw.role is null because the switch does not support
         // role request messages
-        expect(newsw.getRole()).andReturn(null);
         expect(newsw.getAttribute(IOFSwitch.SWITCH_SUPPORTS_NX_ROLE))
                         .andReturn(false);
         // switch is connected 
