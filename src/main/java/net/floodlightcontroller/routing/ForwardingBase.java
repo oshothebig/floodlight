@@ -20,6 +20,8 @@ package net.floodlightcontroller.routing;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -39,6 +41,7 @@ import net.floodlightcontroller.routing.IRoutingDecision;
 import net.floodlightcontroller.routing.Link;
 import net.floodlightcontroller.routing.Route;
 import net.floodlightcontroller.topology.ITopologyService;
+import net.floodlightcontroller.util.TimedCache;
 
 import org.openflow.protocol.OFFlowMod;
 import org.openflow.protocol.OFMatch;
@@ -67,11 +70,18 @@ public abstract class ForwardingBase implements
     protected IRoutingService routingEngine;
     protected ITopologyService topology;
     protected ICounterStoreService counterStore;
+    
+    // for broadcast loop suppression
+    protected boolean broadcastCacheFeature = true;
+    public final int prime = 2633;  // for hash calculation
+    public TimedCache<Long> broadcastCache =
+    		new TimedCache<Long>(100, 5*1000);  // 5 seconds interval;
 
     // flow-mod - for use in the cookie
     public static final int FORWARDING_APP_ID = 2; // TODO: This must be managed
                                                    // by a global APP_ID class
-
+    public long appCookie = AppCookie.makeCookie(FORWARDING_APP_ID, 0);
+    
     // Comparator for sorting by SwitchCluster
     public Comparator<SwitchPort> clusterIdComparator =
             new Comparator<SwitchPort>() {
@@ -368,10 +378,110 @@ public abstract class ForwardingBase implements
         }
     }
 
+    /**
+     * Write packetout message to sw with output actions to one or more
+     * output ports with inPort/outPorts passed in.
+     * Note that the packet in could be from a different switch.
+     * @param pi
+     * @param sw
+     * @param inPort
+     * @param ports
+     * @param cntx
+     */
+    public void PacketOutMultiPort(OFPacketIn pi,
+                                   IOFSwitch sw,
+                                   short inPort,
+                                   HashSet<Integer> outPorts,
+                                   FloodlightContext cntx) {
+        //setting actions
+        List<OFAction> actions = new ArrayList<OFAction>();
+
+        Iterator<Integer> j = outPorts.iterator();
+
+        while (j.hasNext())
+        {
+            actions.add(new OFActionOutput(j.next().shortValue(), 
+                                           (short) 0));
+        }
+
+        OFPacketOut po = 
+                (OFPacketOut) floodlightProvider.getOFMessageFactory().
+                getMessage(OFType.PACKET_OUT);
+        po.setActions(actions);
+        po.setActionsLength((short) (OFActionOutput.MINIMUM_LENGTH * 
+                outPorts.size()));
+
+        // set buffer-id to BUFFER_ID_NONE, and set in-port to OFPP_NONE
+        po.setBufferId(OFPacketOut.BUFFER_ID_NONE);
+        po.setInPort(inPort);
+
+        // data (note buffer_id is always BUFFER_ID_NONE) and length
+        short poLength = (short)(po.getActionsLength() + 
+                OFPacketOut.MINIMUM_LENGTH);
+        byte[] packetData = pi.getPacketData();
+        poLength += packetData.length;
+        po.setPacketData(packetData);
+        po.setLength(poLength);
+
+        try {
+            counterStore.updatePktOutFMCounterStore(sw, po);
+            if (log.isTraceEnabled()) {
+                log.trace("write broadcast packet on switch-id={} " + 
+                        "interaces={} packet-in={} packet-out={}",
+                        new Object[] {sw.getId(), outPorts, pi, po});
+            }
+            sw.write(po, cntx);
+
+        } catch (IOException e) {
+            log.error("Failure writing packet out", e);
+        }
+    }
+
+    protected boolean isInBroadcastCache(IOFSwitch sw, OFPacketIn pi,
+    		FloodlightContext cntx) {
+        // Get the cluster id of the switch.
+        // Get the hash of the Ethernet packet.
+        if (sw == null) return true;  
+        
+        // If the feature is disabled, always return false;
+        if (!broadcastCacheFeature) return false;
+
+        Ethernet eth = 
+            IFloodlightProviderService.bcStore.get(cntx,
+            		IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
+        
+        Long broadcastHash;
+        broadcastHash = topology.getL2DomainId(sw.getId())
+        		* prime + eth.hashCode();
+        if (broadcastCache.update(broadcastHash)) {
+            sw.updateBroadcastCache(broadcastHash, pi.getInPort());
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    protected boolean isInSwitchBroadcastCache(IOFSwitch sw, OFPacketIn pi, FloodlightContext cntx) {
+        if (sw == null) return true;
+        
+        // If the feature is disabled, always return false;
+        if (!broadcastCacheFeature) return false;
+        
+        // Get the hash of the Ethernet packet.
+        Ethernet eth =
+                IFloodlightProviderService.bcStore.get(cntx, IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
+
+        // some FORWARD_OR_FLOOD packets are unicast with unknown destination mac
+        // if (eth.isBroadcast() || eth.isMulticast())
+            return sw.updateBroadcastCache(new Long(eth.hashCode()), pi.getInPort());
+
+        // return false;
+    }
+
     public static boolean
             blockHost(IFloodlightProviderService floodlightProvider,
                       SwitchPort sw_tup, long host_mac,
-                      short hardTimeout) {
+                      short hardTimeout, long cookie) {
 
         if (sw_tup == null) {
             return false;
@@ -395,7 +505,7 @@ public abstract class ForwardingBase implements
              .setInputPort((short)inputPort)
              .setWildcards(OFMatch.OFPFW_ALL & ~OFMatch.OFPFW_DL_SRC
                      & ~OFMatch.OFPFW_IN_PORT);
-        fm.setCookie(AppCookie.makeCookie(FORWARDING_APP_ID, 0))
+        fm.setCookie(cookie)
           .setHardTimeout((short) hardTimeout)
           .setIdleTimeout((short) 5)
           .setBufferId(OFPacketOut.BUFFER_ID_NONE)

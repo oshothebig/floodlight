@@ -43,7 +43,6 @@ import net.floodlightcontroller.core.IInfoProvider;
 import net.floodlightcontroller.core.IOFMessageListener;
 import net.floodlightcontroller.core.IOFSwitch;
 import net.floodlightcontroller.core.IFloodlightProviderService.Role;
-import net.floodlightcontroller.core.IListener.Command;
 import net.floodlightcontroller.core.module.FloodlightModuleContext;
 import net.floodlightcontroller.core.module.IFloodlightModule;
 import net.floodlightcontroller.core.module.IFloodlightService;
@@ -56,6 +55,7 @@ import net.floodlightcontroller.devicemanager.IDeviceListener;
 import net.floodlightcontroller.devicemanager.SwitchPort;
 import net.floodlightcontroller.devicemanager.web.DeviceRoutable;
 import net.floodlightcontroller.flowcache.IFlowReconcileListener;
+import net.floodlightcontroller.flowcache.IFlowReconcileService;
 import net.floodlightcontroller.flowcache.OFMatchReconcile;
 import net.floodlightcontroller.packet.ARP;
 import net.floodlightcontroller.packet.DHCP;
@@ -97,6 +97,7 @@ public class DeviceManagerImpl implements
     protected IStorageSourceService storageSource;
     protected IRestApiService restApi;
     protected IThreadPoolService threadPool;
+    protected IFlowReconcileService flowReconcileMgr;
     
     /**
      * Time in milliseconds before entities will expire
@@ -277,9 +278,12 @@ public class DeviceManagerImpl implements
                 r = d1ClusterId.compareTo(d2ClusterId);
             }
             if (r != 0) return r;
-            
-            long e1ts = getEffTS(e1, e1.getLastSeenTimestamp());
-            long e2ts = getEffTS(e2, e2.getLastSeenTimestamp());
+
+            // the ordering of active times is a more
+            // representative of the causal relationship
+            // than lastSeen time.
+            long e1ts = getEffTS(e1, e1.getActiveSince());
+            long e2ts = getEffTS(e2, e2.getActiveSince());
             return Long.valueOf(e1ts).compareTo(e2ts);
         }
         
@@ -616,6 +620,7 @@ public class DeviceManagerImpl implements
                 fmc.getServiceImpl(ITopologyService.class);
         this.restApi = fmc.getServiceImpl(IRestApiService.class);
         this.threadPool = fmc.getServiceImpl(IThreadPoolService.class);
+        this.flowReconcileMgr = fmc.getServiceImpl(IFlowReconcileService.class);
     }
     
     @Override
@@ -632,6 +637,7 @@ public class DeviceManagerImpl implements
         apComparator = new AttachmentPointComparator();
         
         floodlightProvider.addOFMessageListener(OFType.PACKET_IN, this);
+        flowReconcileMgr.addFlowReconcileListener(this);
         
         Runnable ecr = new Runnable() {
             @Override
