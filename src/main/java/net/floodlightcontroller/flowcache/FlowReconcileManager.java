@@ -10,6 +10,8 @@ import net.floodlightcontroller.core.module.FloodlightModuleException;
 import net.floodlightcontroller.core.module.IFloodlightModule;
 import net.floodlightcontroller.core.module.IFloodlightService;
 import net.floodlightcontroller.core.util.ListenerDispatcher;
+import net.floodlightcontroller.devicemanager.IDevice;
+import net.floodlightcontroller.flowcache.IFlowCacheService.FCQueryEvType;
 import net.floodlightcontroller.flowcache.IFlowReconcileListener;
 import net.floodlightcontroller.flowcache.OFMatchReconcile;
 
@@ -17,15 +19,6 @@ import org.openflow.protocol.OFType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- *
- * This class registers for various network events that may require flow 
- * reconciliation. Examples include host-move, new attachment-point,
- * switch connection etc. 
- * 
- * @author subrata
- *
- */
 public class FlowReconcileManager 
         implements IFloodlightModule, IFlowReconcileService {
 
@@ -95,12 +88,37 @@ public class FlowReconcileManager
         }
     }
     
+    @Override
+    public void updateFlowForDestinationDevice(IDevice device, FCQueryEvType fcEvType){
+    	// NO-OP
+    }
+
+    @Override
+    public void updateFlowForSourceDevice(IDevice device, FCQueryEvType fcEvType){
+    	// NO-OP
+    }
+    
+    @Override
+    public void flowQueryGenericHandler(FlowCacheQueryResp flowResp) {
+        if (flowResp.queryObj.evType != FCQueryEvType.GET) {
+            OFMatchReconcile ofmRc = newOFMatchReconcile();
+            /* Re-provision these flows */
+            for (QRFlowCacheObj entry : flowResp.qrFlowCacheObjList) {
+                /* reconcile the flows in entry */
+                entry.toOFMatchReconcile(ofmRc, flowResp.queryObj.applInstName,
+                                                OFMatchReconcile.ReconcileAction.UPDATE_PATH);
+                reconcileFlow(ofmRc);
+            }
+        }
+        return;
+    }
+    
     // IFloodlightModule
 
     @Override
     public Collection<Class<? extends IFloodlightService>> getModuleServices() {
         Collection<Class<? extends IFloodlightService>> l = 
-                new ArrayList<Class<? extends IFloodlightService>>();
+            new ArrayList<Class<? extends IFloodlightService>>();
         l.add(IFlowReconcileService.class);
         return l;
     }
@@ -108,8 +126,8 @@ public class FlowReconcileManager
     @Override
     public Map<Class<? extends IFloodlightService>, IFloodlightService> 
                                                             getServiceImpls() {
-    	Map<Class<? extends IFloodlightService>,
-    	IFloodlightService> m = 
+        Map<Class<? extends IFloodlightService>,
+        IFloodlightService> m = 
             new HashMap<Class<? extends IFloodlightService>,
                 IFloodlightService>();
         m.put(IFlowReconcileService.class, this);
