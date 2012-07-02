@@ -345,12 +345,14 @@ public class Controller implements IFloodlightProviderService,
     }
 
     @Override
-    public synchronized Role getRole() {
-        return role;
+    public Role getRole() {
+        synchronized(roleChanger) {
+            return role;
+        }
     }
     
     @Override
-    public synchronized void setRole(Role role) {
+    public void setRole(Role role) {
         if (role == null) throw new NullPointerException("Role can not be null.");
         
         // Need to synchronize to ensure a reliable ordering on role request
@@ -359,6 +361,11 @@ public class Controller implements IFloodlightProviderService,
         // timeout handling
         // @see RoleChanger
         synchronized(roleChanger) {
+            if (role.equals(this.role)) {
+                log.debug("Ignoring role change: role is already {}", role);
+                return;
+            }
+
             Role oldRole = this.role;
             this.role = role;
             
@@ -1387,6 +1394,11 @@ public class Controller implements IFloodlightProviderService,
     @Override
     public boolean injectOfMessage(IOFSwitch sw, OFMessage msg,
                                    FloodlightContext bc) {
+        if (sw == null) {
+            log.info("Failed to inject OFMessage {} onto a null switch", msg);
+            return false;
+        }
+        
         // FIXME: Do we need to be able to inject messages to switches
         // where we're the slave controller (i.e. they're connected but
         // not active)?
