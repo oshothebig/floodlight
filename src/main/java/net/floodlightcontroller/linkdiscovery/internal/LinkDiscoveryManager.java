@@ -216,6 +216,15 @@ public class LinkDiscoveryManager
         return shuttingDown;
     }
     
+    public ILinkDiscovery.LinkType getLinkType(LinkTuple lt, LinkInfo info) {
+        if (info.getUnicastValidTime() != null) {
+            return ILinkDiscovery.LinkType.DIRECT_LINK;
+        } else if (info.getMulticastValidTime() != null) {
+            return ILinkDiscovery.LinkType.MULTIHOP_LINK;
+        }
+        return ILinkDiscovery.LinkType.INVALID_LINK;
+    }
+    
     private void doUpdatesThread() throws InterruptedException {
         do {
             LDUpdate update = updates.take();
@@ -612,7 +621,7 @@ public class LinkDiscoveryManager
                                 lt.getSrc().getPort(),
                                 lt.getDst().getPort(),
                                 newLinkInfo.getSrcPortState(), newLinkInfo.getDstPortState(),
-                                LinkInfo.getLinkType(lt, newLinkInfo),
+                                getLinkType(lt, newLinkInfo),
                                 EvAction.LINK_ADDED, "LLDP Recvd");
             } else {
                 // Since the link info is already there, we need to
@@ -668,14 +677,14 @@ public class LinkDiscoveryManager
                                     lt.getSrc().getPort(),
                                     lt.getDst().getPort(),
                                     newLinkInfo.getSrcPortState(), newLinkInfo.getDstPortState(),
-                                    LinkInfo.getLinkType(lt, newLinkInfo),
+                                    getLinkType(lt, newLinkInfo),
                                     EvAction.LINK_PORT_STATE_UPDATED,
                                     "LLDP Recvd");
                 }
             }
 
             if (linkChanged) {
-                updates.add(new LDUpdate(lt, newLinkInfo.getSrcPortState(), newLinkInfo.getDstPortState(), LinkInfo.getLinkType(lt, newLinkInfo), updateOperation));
+                updates.add(new LDUpdate(lt, newLinkInfo.getSrcPortState(), newLinkInfo.getDstPortState(), getLinkType(lt, newLinkInfo), updateOperation));
             }
         } finally {
             lock.writeLock().unlock();
@@ -809,7 +818,7 @@ public class LinkDiscoveryManager
                             // send an LDUpdate.
                             updates.add(new LDUpdate(lt, linkInfo.getSrcPortState(), 
                                                      linkInfo.getDstPortState(), 
-                                                     LinkInfo.getLinkType(lt, linkInfo), 
+                                                     getLinkType(lt, linkInfo),
                                                      UpdateOperation.ADD_OR_UPDATE));
                             writeLink(lt, linkInfo);
                             linkInfoChanged = true;
@@ -932,7 +941,7 @@ public class LinkDiscoveryManager
                 } else if (linkChanged) {
                     updates.add(new LDUpdate(lt, info.getSrcPortState(), 
                                              info.getDstPortState(), 
-                                             LinkInfo.getLinkType(lt, info), 
+                                             getLinkType(lt, info),
                                              UpdateOperation.ADD_OR_UPDATE));
                 }
             }
@@ -1069,7 +1078,7 @@ public class LinkDiscoveryManager
             rowValues.put(LINK_SRC_SWITCH, srcDpid);
             rowValues.put(LINK_SRC_PORT, lt.getSrc().getPort());
 
-            LinkType type = (LinkInfo.getLinkType(lt, linkInfo));
+            LinkType type = getLinkType(lt, linkInfo);
             if (type == LinkType.DIRECT_LINK)
                 rowValues.put(LINK_TYPE, "internal");
             else if (type == LinkType.MULTIHOP_LINK) 
