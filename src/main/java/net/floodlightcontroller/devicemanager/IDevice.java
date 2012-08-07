@@ -19,6 +19,7 @@ package net.floodlightcontroller.devicemanager;
 
 import java.util.Date;
 
+
 /**
  * Represents an independent device on the network.  A device consists of a 
  * set of entities, and all the information known about a given device comes
@@ -72,6 +73,14 @@ public interface IDevice {
      * @return an array containing all unique attachment points for the device
      */
     public SwitchPort[] getAttachmentPoints(boolean includeError);
+
+    /**
+     * Returns all unique VLAN IDs for the device that were observed on 
+     * the given switch port
+     * @param swp the switch port to query
+     * @return an array containing the unique VLAN IDs
+     */
+    public Short[] getSwitchPortVlanIds(SwitchPort swp);
     
     /**
      * Get the most recent timestamp for this device
@@ -80,10 +89,10 @@ public interface IDevice {
     public Date getLastSeen();
     
     /**
-     * Get the entity classes for the device.
-     * @return the entity classes
-     * @see IEntityClassifier
-     * @see IDeviceService#setEntityClassifier(IEntityClassifier)
+     * Get the entity class for the device.
+     * @return the entity class
+     * @see IEntityClassifierService
      */
-    public IEntityClass[] getEntityClasses();
+    public IEntityClass getEntityClass();
+    
 }

@@ -5,6 +5,7 @@ import java.util.EnumSet;
 import net.floodlightcontroller.devicemanager.IDeviceService;
 import net.floodlightcontroller.devicemanager.IDeviceService.DeviceField;
 
+
 /**
  * This is a thin wrapper around {@link Entity} that allows overriding
  * the behavior of {@link Object#hashCode()} and {@link Object#equals(Object)}
@@ -103,6 +104,9 @@ public class IndexedEntity {
         if (obj == null) return false;
         if (getClass() != obj.getClass()) return false;
         IndexedEntity other = (IndexedEntity) obj;
+        
+        if (!keyFields.equals(other.keyFields))
+            return false;
 
         for (IDeviceService.DeviceField f : keyFields) {
             switch (f) {

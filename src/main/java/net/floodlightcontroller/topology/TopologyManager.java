@@ -166,9 +166,22 @@ public class TopologyManager implements
     public boolean isAttachmentPointPort(long switchid, short port, 
                                          boolean tunnelEnabled) {
         TopologyInstance ti = getCurrentInstance(tunnelEnabled);
-        return ti.isAttachmentPointPort(switchid, port);
+
+        // if the port is not attachment point port according to
+        // topology instance, then return false
+        if (ti.isAttachmentPointPort(switchid, port) == false)
+                return false;
+
+        // Check whether the port is a physical port. We should not learn
+        // attachment points on "special" ports.
+        if ((port & 0xff00) == 0xff00 && port != (short)0xfffe) return false;
+
+        // Make sure that the port is enabled.
+        IOFSwitch sw = floodlightProvider.getSwitches().get(switchid);
+        if (sw == null) return false;
+        return (sw.portEnabled(port));
     }
-    
+
     public long getOpenflowDomainId(long switchId) {
         return getOpenflowDomainId(switchId, true);
     }
@@ -611,12 +624,12 @@ public class TopologyManager implements
         ScheduledExecutorService ses = threadPool.getScheduledExecutor();
         newInstanceTask = new SingletonTask(ses, new NewInstanceWorker());
         linkDiscovery.addListener(this);
-        newInstanceTask.reschedule(1, TimeUnit.MILLISECONDS);
+        clearCurrentTopology();
         floodlightProvider.addOFMessageListener(OFType.PACKET_IN, this);
         floodlightProvider.addHAListener(this);
         addRestletRoutable();
     }
-    
+
     protected void addRestletRoutable() {
         restApi.addRestletRoutable(new TopologyWebRoutable());
     }
@@ -624,43 +637,34 @@ public class TopologyManager implements
     // ****************
     // Internal methods
     // ****************
-    public static boolean isTunnelEnabled(FloodlightContext cntx) {
-        if (cntx == null) return false;
-        Boolean flag = (Boolean) cntx.getStorage().get(CONTEXT_TUNNEL_ENABLED);
-        if (flag == null || flag == false) return false;
-        return true;
-    }
-
-    protected Command dropFilter(IOFSwitch sw, OFPacketIn pi, 
+    /**
+     * If the packet-in switch port is disabled for all data traffic, then
+     * the packet will be dropped.  Otherwise, the packet will follow the
+     * normal processing chain.
+     * @param sw
+     * @param pi
+     * @param cntx
+     * @return
+     */
+    protected Command dropFilter(long sw, OFPacketIn pi,
                                              FloodlightContext cntx) {
         Command result = Command.CONTINUE;
-        Ethernet eth = 
-                IFloodlightProviderService.bcStore.
-                get(cntx,IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
+        short port = pi.getInPort();
 
-        if (isAllowed(sw.getId(), pi.getInPort()) == false) {
-            if (eth.getEtherType() == Ethernet.TYPE_BDDP ||
-                (eth.isBroadcast() == false && eth.isMulticast() == false)) {
-                result = Command.CONTINUE;
-            } else {
-                if (log.isTraceEnabled()) {
-                    log.trace("Ignoring packet because of topology " + 
-                              "restriction on switch={}, port={}", 
-                              new Object[] {sw.getStringId(), 
-                                            pi.getInPort()});
-                }
+        // If the input port is not allowed for data traffic, drop everything.
+        // BDDP packets will not reach this stage.
+        if (isAllowed(sw, port) == false) {
+            if (log.isTraceEnabled()) {
+                log.trace("Ignoring packet because of topology " +
+                        "restriction on switch={}, port={}", sw, port);
                 result = Command.STOP;
             }
         }
+
+        // if sufficient information is available, then drop broadcast
+        // packets here as well.
         return result;
     }
-
-    protected void checkTunnelUsage(IOFSwitch sw, OFPacketIn pi, 
-                                    FloodlightContext cntx) {
-        // tunnels are disabled.
-        cntx.getStorage().put(CONTEXT_TUNNEL_ENABLED, false);
-    }
-    
 
     /** 
      * TODO This method must be moved to a layer below forwarding
@@ -736,9 +740,10 @@ public class TopologyManager implements
         TopologyInstance ti = getCurrentInstance(false);
 
         Set<Long> switches = ti.getSwitchesInOpenflowDomain(pinSwitch);
-        
-        if (switches == null) // this implies that there are no links connected to the switches
+
+        if (switches == null)
         {
+            // indicates no links are connected to the switches
             switches = new HashSet<Long>();
             switches.add(pinSwitch);
         }
@@ -787,10 +792,7 @@ public class TopologyManager implements
         if (eth.getEtherType() == Ethernet.TYPE_BDDP) {
             doFloodBDDP(sw.getId(), pi, cntx);
         } else {
-            // if the packet is BDDP, then send flood it on all the external 
-            // switch ports in the same openflow domain.
-            checkTunnelUsage(sw, pi, cntx);
-            return dropFilter(sw, pi, cntx);
+            return dropFilter(sw.getId(), pi, cntx);
         }
         return Command.STOP;
     }
@@ -837,7 +839,7 @@ public class TopologyManager implements
                            update.getDst(), update.getDstPort());
                 updateApplied = true;
             }
-            
+
             if (updateApplied) {
             	appliedUpdates.add(newUpdate);
             }
@@ -1020,7 +1022,7 @@ public class TopologyManager implements
         tunnelLinks.clear();
         appliedUpdates.clear();
     }
-    
+
     /**
     * Clears the current topology. Note that this does NOT
     * send out updates.
@@ -1028,8 +1030,9 @@ public class TopologyManager implements
     private void clearCurrentTopology() {
         this.clear();
         createNewInstance();
+        lastUpdateTime = new Date();
     }
-    
+
     /**
      * Getters.  No Setters.
      */
@@ -1053,11 +1056,6 @@ public class TopologyManager implements
 
     public TopologyInstance getCurrentInstance() {
         return this.getCurrentInstance(true);
-    }
-
-    @Override
-    public boolean isTunnelEnabled(long srcMac, long dstMac) {
-        return false;
     }
 }
 

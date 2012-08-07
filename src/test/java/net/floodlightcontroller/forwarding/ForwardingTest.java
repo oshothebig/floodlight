@@ -21,6 +21,7 @@ import static org.easymock.EasyMock.createMock;
 import static org.easymock.EasyMock.expect;
 import static org.easymock.EasyMock.expectLastCall;
 import static org.easymock.EasyMock.replay;
+import static org.easymock.EasyMock.reset;
 import static org.easymock.EasyMock.verify;
 import static org.easymock.EasyMock.capture;
 import static org.easymock.EasyMock.anyLong;
@@ -38,11 +39,13 @@ import net.floodlightcontroller.core.IOFSwitch;
 import net.floodlightcontroller.core.module.FloodlightModuleContext;
 import net.floodlightcontroller.core.test.MockFloodlightProvider;
 import net.floodlightcontroller.core.test.MockThreadPoolService;
+import net.floodlightcontroller.devicemanager.internal.DefaultEntityClassifier;
 import net.floodlightcontroller.devicemanager.test.MockDeviceManager;
 import net.floodlightcontroller.counter.CounterStore;
 import net.floodlightcontroller.counter.ICounterStoreService;
 import net.floodlightcontroller.devicemanager.IDevice;
 import net.floodlightcontroller.devicemanager.IDeviceService;
+import net.floodlightcontroller.devicemanager.IEntityClassifierService;
 import net.floodlightcontroller.packet.Data;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.IPacket;
@@ -103,7 +106,8 @@ public class ForwardingTest extends FloodlightTestCase {
         flowReconcileMgr = new FlowReconcileManager();
         routingEngine = createMock(IRoutingService.class);
         topology = createMock(ITopologyService.class);
-        
+        DefaultEntityClassifier entityClassifier = new DefaultEntityClassifier();
+
 
         FloodlightModuleContext fmc = new FloodlightModuleContext();
         fmc.addService(IFloodlightProviderService.class, 
@@ -114,15 +118,18 @@ public class ForwardingTest extends FloodlightTestCase {
         fmc.addService(ICounterStoreService.class, new CounterStore());
         fmc.addService(IDeviceService.class, deviceManager);
         fmc.addService(IFlowReconcileService.class, flowReconcileMgr);
+        fmc.addService(IEntityClassifierService.class, entityClassifier);
 
         threadPool.init(fmc);
         forwarding.init(fmc);
         deviceManager.init(fmc);
         flowReconcileMgr.init(fmc);
+        entityClassifier.init(fmc);
         threadPool.startUp(fmc);
         deviceManager.startUp(fmc);
         forwarding.startUp(fmc);
         flowReconcileMgr.startUp(fmc);
+        entityClassifier.startUp(fmc);
         
         // Mock switches
         sw1 = EasyMock.createNiceMock(IOFSwitch.class);
@@ -182,6 +189,14 @@ public class ForwardingTest extends FloodlightTestCase {
                     getDestinationAddress();
 
         currentDate = new Date();
+        expect(topology.isAttachmentPointPort(1L, (short)1))
+                                              .andReturn(true)
+                                              .anyTimes();
+        expect(topology.isAttachmentPointPort(2L, (short)3))
+                                              .andReturn(true)
+                                              .anyTimes();
+        replay(topology);
+
         srcDevice = 
                 deviceManager.learnEntity(Ethernet.toLong(dataLayerSource), 
                                           null, networkSource,
@@ -209,7 +224,7 @@ public class ForwardingTest extends FloodlightTestCase {
         packetOut.setBufferId(this.packetIn.getBufferId())
             .setInPort(this.packetIn.getInPort());
         List<OFAction> poactions = new ArrayList<OFAction>();
-        poactions.add(new OFActionOutput((short) 3, (short) 0));
+        poactions.add(new OFActionOutput((short) 3, (short) 0xffff));
         packetOut.setActions(poactions)
             .setActionsLength((short) OFActionOutput.MINIMUM_LENGTH)
             .setPacketData(testPacketSerialized)
@@ -268,7 +283,7 @@ public class ForwardingTest extends FloodlightTestCase {
         // Expected Flow-mods
         OFMatch match = new OFMatch();
         match.loadFromPacket(testPacketSerialized, (short) 1);
-        OFActionOutput action = new OFActionOutput((short)3, (short)0);
+        OFActionOutput action = new OFActionOutput((short)3, (short)0xffff);
         List<OFAction> actions = new ArrayList<OFAction>();
         actions.add(action);
 
@@ -290,6 +305,9 @@ public class ForwardingTest extends FloodlightTestCase {
         sw2.write(capture(wc2), capture(bc2));
         expectLastCall().anyTimes(); 
 
+        reset(topology);
+        expect(topology.getL2DomainId(1L)).andReturn(1L).anyTimes();
+        expect(topology.getL2DomainId(2L)).andReturn(1L).anyTimes();
         expect(topology.isIncomingBroadcastAllowed(anyLong(), anyShort())).andReturn(true).anyTimes();
 
         // Reset mocks, trigger the packet in, and validate results
@@ -304,9 +322,9 @@ public class ForwardingTest extends FloodlightTestCase {
         
         for (OFMessage m: msglist) {
             if (m instanceof OFFlowMod) 
-                assertTrue(m.equals(fm1));
+                assertEquals(fm1, m);
             else if (m instanceof OFPacketOut)
-                assertTrue(m.equals(packetOut)); 
+                assertEquals(packetOut, m);
         }
         
         OFMessage m = wc2.getValue();
@@ -327,7 +345,12 @@ public class ForwardingTest extends FloodlightTestCase {
                 ((IPv4)((Ethernet)testPacket).getPayload()).
                     getDestinationAddress();
         deviceManager.startUp(null);
-        
+
+        reset(topology);
+        expect(topology.isAttachmentPointPort(EasyMock.anyLong(), EasyMock.anyShort()))
+        .andReturn(true).anyTimes();
+        replay(topology);
+
         srcDevice = 
                 deviceManager.learnEntity(Ethernet.toLong(dataLayerSource), 
                                           null, networkSource,
@@ -350,7 +373,7 @@ public class ForwardingTest extends FloodlightTestCase {
         // Expected Flow-mods
         OFMatch match = new OFMatch();
         match.loadFromPacket(testPacketSerialized, (short) 1);
-        OFActionOutput action = new OFActionOutput((short)3, (short)0);
+        OFActionOutput action = new OFActionOutput((short)3, (short)0xffff);
         List<OFAction> actions = new ArrayList<OFAction>();
         actions.add(action);
 
@@ -370,7 +393,9 @@ public class ForwardingTest extends FloodlightTestCase {
         sw1.write(fm1, cntx);
         sw1.write(packetOut, cntx);
         
+        reset(topology);
         expect(topology.isIncomingBroadcastAllowed(anyLong(), anyShort())).andReturn(true).anyTimes();
+        expect(topology.getL2DomainId(1L)).andReturn(1L).anyTimes();
 
         // Reset mocks, trigger the packet in, and validate results
         replay(sw1, sw2, routingEngine, topology);
@@ -385,7 +410,12 @@ public class ForwardingTest extends FloodlightTestCase {
         // expect no Flow-mod or packet out
                 
         // Reset mocks, trigger the packet in, and validate results
+        reset(topology);
         expect(topology.isIncomingBroadcastAllowed(1L, (short)1)).andReturn(true).anyTimes();
+        expect(topology.isAttachmentPointPort(EasyMock.anyLong(),
+                                              EasyMock.anyShort()))
+                                              .andReturn(true)
+                                              .anyTimes();
         replay(sw1, sw2, routingEngine, topology);
         forwarding.receive(sw1, this.packetIn, cntx);
         verify(sw1, sw2, routingEngine);

@@ -18,7 +18,6 @@
 package net.floodlightcontroller.devicemanager.internal;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
@@ -29,6 +28,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -50,7 +50,8 @@ import net.floodlightcontroller.core.util.SingletonTask;
 import net.floodlightcontroller.devicemanager.IDevice;
 import net.floodlightcontroller.devicemanager.IDeviceService;
 import net.floodlightcontroller.devicemanager.IEntityClass;
-import net.floodlightcontroller.devicemanager.IEntityClassifier;
+import net.floodlightcontroller.devicemanager.IEntityClassListener;
+import net.floodlightcontroller.devicemanager.IEntityClassifierService;
 import net.floodlightcontroller.devicemanager.IDeviceListener;
 import net.floodlightcontroller.devicemanager.SwitchPort;
 import net.floodlightcontroller.devicemanager.web.DeviceRoutable;
@@ -74,7 +75,6 @@ DeviceManagerImpl.DeviceUpdate.Change.*;
 import org.openflow.protocol.OFMatchWithSwDpid;
 import org.openflow.protocol.OFMessage;
 import org.openflow.protocol.OFPacketIn;
-import org.openflow.protocol.OFPhysicalPort;
 import org.openflow.protocol.OFType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,7 +87,7 @@ import org.slf4j.LoggerFactory;
  */
 public class DeviceManagerImpl implements
 IDeviceService, IOFMessageListener,
-IStorageSourceListener, IFloodlightModule,
+IStorageSourceListener, IFloodlightModule, IEntityClassListener,
 IFlowReconcileListener, IInfoProvider, IHAListener {
     protected static Logger logger =
             LoggerFactory.getLogger(DeviceManagerImpl.class);
@@ -108,14 +108,6 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
      * Time in seconds between cleaning up old entities/devices
      */
     protected static final int ENTITY_CLEANUP_INTERVAL = 60*60;
-
-    /**
-     * Attachment points on a broadcast domain will have lower priority
-     * than attachment points in openflow domains.  This is the timeout
-     * for switching from a non-broadcast domain to a broadcast domain
-     * attachment point.
-     */
-    protected static long NBD_TO_BD_TIMEDIFF_MS = 300000; // 5 minutes
 
     /**
      * This is the master device map that maps device IDs to {@link Device}
@@ -157,7 +149,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
     /**
      * The entity classifier currently in use
      */
-    IEntityClassifier entityClassifier;
+    protected IEntityClassifierService entityClassifier;
 
     /**
      * Used to cache state about specific entity classes
@@ -236,59 +228,82 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
     }
 
     /**
-     * Comparator for finding the correct attachment point to use based on
-     * the set of entities
+     * AttachmentPointComparator
+     * 
+     * Compares two attachment points and returns the latest one.
+     * It is assumed that the two attachment points are in the same
+     * L2 domain.
+     * 
+     * @author srini
      */
     protected class AttachmentPointComparator
-    implements Comparator<Entity> {
-
-
+    implements Comparator<AttachmentPoint> {
         public AttachmentPointComparator() {
             super();
         }
 
-        protected long getEffTS(Entity e, Date ts) {
-            if (ts == null)
-                return 0;
-            long et = ts.getTime();
-            Long dpid = e.getSwitchDPID();
-            Integer port = e.getSwitchPort();
-            if (dpid != null && port != null &&
-                    topology.isBroadcastDomainPort(dpid, port.shortValue())) {
-                return et - NBD_TO_BD_TIMEDIFF_MS;
-            }
-            return et;
-        }
-
         @Override
-        public int compare(Entity e1, Entity e2) {
-            int r = 0;
+        public int compare(AttachmentPoint oldAP, AttachmentPoint newAP) {
 
-            Long swdpid1 = e1.getSwitchDPID();
-            Long swdpid2 = e2.getSwitchDPID();
-            if (swdpid1 == null)
-                r = swdpid2 == null ? 0 : -1;
-            else if (swdpid2 == null)
-                r = 1;
-            else {
-                Long d1ClusterId =
-                        topology.getL2DomainId(swdpid1);
-                Long d2ClusterId =
-                        topology.getL2DomainId(swdpid2);
-                r = d1ClusterId.compareTo(d2ClusterId);
-            }
-            if (r != 0) return r;
+            //First compare based on L2 domain ID; 
+            long oldSw = oldAP.getSw();
+            short oldPort = oldAP.getPort();
+            long newSw = newAP.getSw();
+            short newPort = newAP.getPort();
 
-            // the ordering of active times is a more
-            // representative of the causal relationship
-            // than lastSeen time.
-            long e1ts = getEffTS(e1, e1.getActiveSince());
-            long e2ts = getEffTS(e2, e2.getActiveSince());
-            return Long.valueOf(e1ts).compareTo(e2ts);
+            long oldDomain = topology.getL2DomainId(oldSw);
+            long newDomain = topology.getL2DomainId(newSw);
+
+            if (oldDomain < newDomain) return -1;
+            else if (oldDomain > newDomain) return 1;
+
+            // We expect that the last seen of the new AP is higher than
+            // old AP, if it is not, just reverse and send the negative
+            // of the result.
+            if (oldAP.getLastSeen() > newAP.getLastSeen())
+                return -compare(newAP, oldAP);
+
+
+            // If newAP is inconsistent with the oldAP
+            // and the newAP is not a broadcast domain.
+            if (!topology.isConsistent(oldSw, oldPort, newSw, newPort) &&
+                    !topology.isBroadcastDomainPort(newSw, newPort))
+                return 1;
+
+            // If newAP is inconsistent with the oldAP and
+            // oldAP belongs to broadcast domain and
+            // newAP belongs to broadcast domain and
+            // newLastSeen > oldLastSeen + EXT_TO_EXT_TIMEOUT
+            if (!topology.isConsistent(oldSw, oldPort, newSw, newPort) &&
+                    topology.isBroadcastDomainPort(oldSw, oldPort) &&
+                    topology.isBroadcastDomainPort(newSw, newPort) &&
+                    newAP.getLastSeen() > oldAP.getLastSeen() + 
+                        AttachmentPoint.EXTERNAL_TO_EXTERNAL_TIMEOUT)
+                return 1;
+
+            // If newAP is inconsistent with the oldAP and
+            // oldAP does not to broadcast domain and
+            // newAP belongs to broadcast domain and
+            // newLastSeen > oldLastSeen + EXT_TO_EXT_TIMEOUT
+            if (!topology.isConsistent(oldSw, oldPort, newSw, newPort) &&
+                    !topology.isBroadcastDomainPort(oldSw, oldPort) &&
+                    topology.isBroadcastDomainPort(newSw, newPort) &&
+                    newAP.getLastSeen() > oldAP.getLastSeen() + 
+                        AttachmentPoint.OPENFLOW_TO_EXTERNAL_TIMEOUT)
+                return 1;
+
+            // If newAP is inconsistent with the oldAP and
+            // oldAP does not to broadcast domain and
+            // newAP belongs to broadcast domain and
+            // newLastSeen > oldLastSeen + EXT_TO_EXT_TIMEOUT
+            if (topology.isConsistent(oldSw, oldPort, newSw, newPort) &&
+                    newAP.getLastSeen() > oldAP.getLastSeen() +
+                        AttachmentPoint.CONSISTENT_TIMEOUT)
+                return 1;
+
+            return -1;
         }
-
     }
-
     /**
      * Comparator for sorting by cluster ID
      */
@@ -316,30 +331,38 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
     @Override
     public IDevice findDevice(long macAddress, Short vlan,
                               Integer ipv4Address, Long switchDPID,
-                              Integer switchPort) {
+                              Integer switchPort)
+                              throws IllegalArgumentException {
         if (vlan != null && vlan.shortValue() <= 0)
             vlan = null;
         if (ipv4Address != null && ipv4Address == 0)
             ipv4Address = null;
-        return findDeviceByEntity(new Entity(macAddress, vlan,
-                                             ipv4Address, switchDPID,
-                                             switchPort, null));
+        Entity e = new Entity(macAddress, vlan, ipv4Address, switchDPID,
+                              switchPort, null);
+        if (!allKeyFieldsPresent(e, entityClassifier.getKeyFields())) {
+            throw new IllegalArgumentException("Not all key fields specified."
+                      + " Required fields: " + entityClassifier.getKeyFields());
+        }
+        return findDeviceByEntity(e);
     }
 
     @Override
     public IDevice findDestDevice(IDevice source, long macAddress,
-                                  Short vlan, Integer ipv4Address) {
+                                  Short vlan, Integer ipv4Address) 
+                                  throws IllegalArgumentException {
         if (vlan != null && vlan.shortValue() <= 0)
             vlan = null;
         if (ipv4Address != null && ipv4Address == 0)
             ipv4Address = null;
-        return findDestByEntity(source,
-                                new Entity(macAddress,
-                                           vlan,
-                                           ipv4Address,
-                                           null,
-                                           null,
-                                           null));
+        Entity e = new Entity(macAddress, vlan, ipv4Address,
+                              null, null, null);
+        if (source == null || 
+                !allKeyFieldsPresent(e, source.getEntityClass().getKeyFields())) {
+            throw new IllegalArgumentException("Not all key fields and/or "
+                    + " no source device specified. Required fields: " + 
+                    entityClassifier.getKeyFields());
+        }
+        return findDestByEntity(source, e);
     }
 
     @Override
@@ -406,65 +429,52 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                                                          Integer ipv4Address,
                                                          Long switchDPID,
                                                          Integer switchPort) {
-        IEntityClass[] entityClasses = reference.getEntityClasses();
+        IEntityClass entityClass = reference.getEntityClass();
         ArrayList<Iterator<Device>> iterators =
                 new ArrayList<Iterator<Device>>();
-        for (IEntityClass clazz : entityClasses) {
-            ClassState classState = getClassState(clazz);
-
-            DeviceIndex index = null;
-            if (classState.secondaryIndexMap.size() > 0) {
-                EnumSet<DeviceField> keys =
-                        getEntityKeys(macAddress, vlan, ipv4Address,
-                                      switchDPID, switchPort);
-                index = classState.secondaryIndexMap.get(keys);
-            }
-
-            Iterator<Device> iter;
-            if (index == null) {
-                index = classState.classIndex;
-                if (index == null) {
-                    // scan all devices
-                    return new DeviceIterator(deviceMap.values().iterator(),
-                                              entityClasses,
-                                              macAddress, vlan, ipv4Address,
-                                              switchDPID, switchPort);
-                } else {
-                    // scan the entire class
-                    iter = new DeviceIndexInterator(this, index.getAll());
-                }
-            } else {
-                // index lookup
-                Entity entity =
-                        new Entity((macAddress == null ? 0 : macAddress),
-                                   vlan,
-                                   ipv4Address,
-                                   switchDPID,
-                                   switchPort,
-                                   null);
-                iter = new DeviceIndexInterator(this,
-                                                index.queryByEntity(entity));
-            }
-            iterators.add(iter);
+        ClassState classState = getClassState(entityClass);
+        
+        DeviceIndex index = null;
+        if (classState.secondaryIndexMap.size() > 0) {
+            EnumSet<DeviceField> keys =
+                    getEntityKeys(macAddress, vlan, ipv4Address,
+                                  switchDPID, switchPort);
+            index = classState.secondaryIndexMap.get(keys);
         }
-
+        
+        Iterator<Device> iter;
+        if (index == null) {
+            index = classState.classIndex;
+            if (index == null) {
+                // scan all devices
+                return new DeviceIterator(deviceMap.values().iterator(),
+                                          new IEntityClass[] { entityClass },
+                                          macAddress, vlan, ipv4Address,
+                                          switchDPID, switchPort);
+            } else {
+                // scan the entire class
+                iter = new DeviceIndexInterator(this, index.getAll());
+            }
+        } else {
+            // index lookup
+            Entity entity =
+                    new Entity((macAddress == null ? 0 : macAddress),
+                               vlan,
+                               ipv4Address,
+                               switchDPID,
+                               switchPort,
+                               null);
+            iter = new DeviceIndexInterator(this,
+                                            index.queryByEntity(entity));
+        }
+        iterators.add(iter);
+        
         return new MultiIterator<Device>(iterators.iterator());
     }
 
     @Override
     public void addListener(IDeviceListener listener) {
         deviceListeners.add(listener);
-    }
-
-    @Override
-    public void setEntityClassifier(IEntityClassifier classifier) {
-        entityClassifier = classifier;
-    }
-
-    @Override
-    public void flushEntityCache(IEntityClass entityClass,
-                                 boolean reclassify) {
-        // TODO Auto-generated method stub
     }
 
     // *************
@@ -527,8 +537,8 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
             if (srcEntity == null)
                 return Command.STOP;
 
-            // Learn/lookup device information
-            Device srcDevice = learnDeviceByEntity(srcEntity);
+            // Find the device by source entity
+            Device srcDevice = findDeviceByEntity(srcEntity);
             if (srcDevice == null)
                 return Command.STOP;
 
@@ -538,11 +548,11 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
             // Find the device matching the destination from the entity
             // classes of the source.
             Entity dstEntity = getEntityFromFlowMod(ofm.ofmWithSwDpid, false);
-            logger.debug("DeviceManager dstEntity {}", dstEntity);
+            logger.trace("DeviceManager dstEntity {}", dstEntity);
             if (dstEntity != null) {
                 Device dstDevice =
                         findDestByEntity(srcDevice, dstEntity);
-                logger.debug("DeviceManager dstDevice {}", dstDevice);
+                logger.trace("DeviceManager dstDevice {}", dstDevice);
                 if (dstDevice != null)
                     fcStore.put(ofm.cntx, CONTEXT_DST_DEVICE, dstDevice);
             }
@@ -600,6 +610,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         l.add(IRestApiService.class);
         l.add(IThreadPoolService.class);
         l.add(IFlowReconcileService.class);
+        l.add(IEntityClassifierService.class);
         return l;
     }
 
@@ -622,13 +633,11 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         this.restApi = fmc.getServiceImpl(IRestApiService.class);
         this.threadPool = fmc.getServiceImpl(IThreadPoolService.class);
         this.flowReconcileMgr = fmc.getServiceImpl(IFlowReconcileService.class);
+        this.entityClassifier = fmc.getServiceImpl(IEntityClassifierService.class);
     }
 
     @Override
     public void startUp(FloodlightModuleContext fmc) {
-        if (entityClassifier == null)
-            setEntityClassifier(new DefaultEntityClassifier());
-
         primaryIndex = new DeviceUniqueIndex(entityClassifier.getKeyFields());
         secondaryIndexMap = new HashMap<EnumSet<DeviceField>, DeviceIndex>();
 
@@ -640,11 +649,12 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         floodlightProvider.addOFMessageListener(OFType.PACKET_IN, this);
         floodlightProvider.addHAListener(this);
         flowReconcileMgr.addFlowReconcileListener(this);
+        entityClassifier.addListener(this);
 
         Runnable ecr = new Runnable() {
             @Override
             public void run() {
-                cleanupEntities();
+                cleanupEntities(null, false);
                 entityCleanupTask.reschedule(ENTITY_CLEANUP_INTERVAL,
                                              TimeUnit.SECONDS);
             }
@@ -710,13 +720,21 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         // Find the device matching the destination from the entity
         // classes of the source.
         Entity dstEntity = getDestEntityFromPacket(eth);
+        Device dstDevice = null;
         if (dstEntity != null) {
-            Device dstDevice =
+            dstDevice =
                     findDestByEntity(srcDevice, dstEntity);
             if (dstDevice != null)
                 fcStore.put(cntx, CONTEXT_DST_DEVICE, dstDevice);
         }
 
+       if (logger.isTraceEnabled()) {
+           logger.trace("Received PI: {} on switch {}, port {} *** eth={}" +
+           		     " *** srcDev={} *** dstDev={} *** ",
+           		     new Object[] { pi, sw.getStringId(), pi.getInPort(), eth,
+           		                    srcDevice, dstDevice }
+	       );
+       }
         return Command.CONTINUE;
     }
 
@@ -729,17 +747,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
      */
     protected boolean isValidAttachmentPoint(long switchDPID,
                                              int switchPort) {
-        IOFSwitch sw = floodlightProvider.getSwitches().get(switchDPID);
-        if (sw == null) return false;
-        OFPhysicalPort port = sw.getPort((short)switchPort);
-        if (port == null || !sw.portEnabled(port)) return false;
         if (topology.isAttachmentPointPort(switchDPID, (short)switchPort) == false)
-            return false;
-
-        // Check whether the port is a physical port. We should not learn
-        // attachment points on "special" ports.
-        if (((switchPort & 0xff00) == 0xff00) &&
-                (switchPort != (short)0xfffe))
             return false;
 
         if (suppressAPs.contains(new SwitchPort(switchDPID, switchPort)))
@@ -748,6 +756,13 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         return true;
     }
 
+    /**
+     * Get IP address from packet if the packet is either an ARP 
+     * or a DHCP packet
+     * @param eth
+     * @param dlAddr
+     * @return
+     */
     private int getSrcNwAddr(Ethernet eth, long dlAddr) {
         if (eth.getPayload() instanceof ARP) {
             ARP arp = (ARP) eth.getPayload();
@@ -777,7 +792,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
      * @param pi the original packetin
      * @return the entity from the packet
      */
-    private Entity getSourceEntityFromPacket(Ethernet eth,
+    protected Entity getSourceEntityFromPacket(Ethernet eth,
                                              long swdpid,
                                              int port) {
         byte[] dlAddrArr = eth.getSourceMACAddress();
@@ -787,24 +802,13 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         if ((dlAddrArr[0] & 0x1) != 0)
             return null;
 
-        boolean learnap = true;
-        if (!isValidAttachmentPoint(swdpid, (short)port)) {
-            // If this is an internal port or we otherwise don't want
-            // to learn on these ports.  In the future, we should
-            // handle this case by labeling flows with something that
-            // will give us the entity class.  For now, we'll do our
-            // best assuming attachment point information isn't used
-            // as a key field.
-            learnap = false;
-        }
-
         short vlan = eth.getVlanID();
         int nwSrc = getSrcNwAddr(eth, dlAddr);
         return new Entity(dlAddr,
                           ((vlan >= 0) ? vlan : null),
                           ((nwSrc != 0) ? nwSrc : null),
-                          (learnap ? swdpid : null),
-                          (learnap ? port : null),
+                          swdpid,
+                          port,
                           new Date());
     }
 
@@ -813,7 +817,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
      * @param eth
      * @return
      */
-    private Entity getDestEntityFromPacket(Ethernet eth) {
+    protected Entity getDestEntityFromPacket(Ethernet eth) {
         byte[] dlAddrArr = eth.getDestinationMACAddress();
         long dlAddr = Ethernet.toLong(dlAddrArr);
         short vlan = eth.getVlanID();
@@ -855,11 +859,18 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         if ((dlAddrArr[0] & 0x1) != 0)
             return null;
 
-        long swDpid = ofmWithSwDpid.getSwitchDataPathId();
-        short inPort = ofmWithSwDpid.getOfMatch().getInputPort();
+        Long swDpid = null;
+        Short inPort = null;
+        
+        if (isSource) {
+        	swDpid = ofmWithSwDpid.getSwitchDataPathId();
+        	inPort = ofmWithSwDpid.getOfMatch().getInputPort();
+        }
 
         boolean learnap = true;
-        if (!isValidAttachmentPoint(swDpid, inPort)) {
+        if (swDpid == null ||
+        		inPort == null ||
+        		!isValidAttachmentPoint(swDpid, inPort)) {
             // If this is an internal port or we otherwise don't want
             // to learn on these ports.  In the future, we should
             // handle this case by labeling flows with something that
@@ -878,12 +889,36 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                           new Date());
     }
     /**
-     * Look up a {@link Device} based on the provided {@link Entity}.
+     * Look up a {@link Device} based on the provided {@link Entity}. We first
+     * check the primary index. If we do not find an entry there we classify
+     * the device into its IEntityClass and query the classIndex. 
+     * This implies that all key field of the current IEntityClassifier must 
+     * be present in the entity for the lookup to succeed!
      * @param entity the entity to search for
      * @return The {@link Device} object if found
      */
     protected Device findDeviceByEntity(Entity entity) {
-        Long deviceKey =  primaryIndex.findByEntity(entity);
+        // Look up the fully-qualified entity to see if it already
+        // exists in the primary entity index.
+        Long deviceKey = primaryIndex.findByEntity(entity);
+        IEntityClass entityClass = null;
+
+        if (deviceKey == null) {
+            // If the entity does not exist in the primary entity index,
+            // use the entity classifier for find the classes for the
+            // entity. Look up the entity in the returned class'
+            // class entity index.
+            entityClass = entityClassifier.classifyEntity(entity);
+            if (entityClass == null) {
+                return null;
+            }
+            ClassState classState = getClassState(entityClass);
+
+            if (classState.classIndex != null) {
+                deviceKey =
+                        classState.classIndex.findByEntity(entity);
+            }
+        }
         if (deviceKey == null) return null;
         return deviceMap.get(deviceKey);
     }
@@ -900,36 +935,30 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
      */
     protected Device findDestByEntity(IDevice source,
                                       Entity dstEntity) {
-        Device dstDevice = findDeviceByEntity(dstEntity);
-
-        //if (dstDevice == null) {
-        // This could happen because:
-        // 1) no destination known, or a broadcast destination
-        // 2) if we have attachment point key fields since
-        // attachment point information isn't available for
-        // destination devices.
-        // For the second case, we'll need to match up the
-        // destination device with the class of the source
-        // device.
-        /*
-                ArrayList<Device> candidates = new ArrayList<Device>();
-                for (IEntityClass clazz : srcDevice.getEntityClasses()) {
-                    Device c = findDeviceInClassByEntity(clazz, dstEntity);
-                    if (c != null)
-                        candidates.add(c);
-                }
-                if (candidates.size() == 1) {
-                    dstDevice = candidates.get(0);
-                } else if (candidates.size() > 1) {
-                    // ambiguous device.  A higher-order component will
-                    // need to deal with it by assigning priority
-                    // XXX - TODO
-                }
-         */
-        //}
-
-        return dstDevice;
+        
+        // Look  up the fully-qualified entity to see if it 
+        // exists in the primary entity index
+        Long deviceKey = primaryIndex.findByEntity(dstEntity);
+        
+        if (deviceKey == null) {
+            // This could happen because:
+            // 1) no destination known, or a broadcast destination
+            // 2) if we have attachment point key fields since
+            // attachment point information isn't available for
+            // destination devices.
+            // For the second case, we'll need to match up the
+            // destination device with the class of the source
+            // device.
+            ClassState classState = getClassState(source.getEntityClass());
+            if (classState.classIndex == null) {
+                return null;
+            }
+            deviceKey = classState.classIndex.findByEntity(dstEntity);
+        }
+        if (deviceKey == null) return null;
+        return deviceMap.get(deviceKey);
     }
+    
 
     /**
      * Look up a {@link Device} within a particular entity class based on
@@ -967,21 +996,23 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
             // Look up the fully-qualified entity to see if it already
             // exists in the primary entity index.
             Long deviceKey = primaryIndex.findByEntity(entity);
-            Collection<IEntityClass> classes = null;
+            IEntityClass entityClass = null;
 
             if (deviceKey == null) {
                 // If the entity does not exist in the primary entity index,
                 // use the entity classifier for find the classes for the
-                // entity. Look up the entity in each of the returned classes'
-                // class entity indexes.
-                classes = entityClassifier.classifyEntity(entity);
-                for (IEntityClass clazz : classes) {
-                    ClassState classState = getClassState(clazz);
+                // entity. Look up the entity in the returned class'
+                // class entity index.
+                entityClass = entityClassifier.classifyEntity(entity);
+                if (entityClass == null) {
+                    // could not classify entity. No device
+                    return null;
+                }
+                ClassState classState = getClassState(entityClass);
 
-                    if (classState.classIndex != null) {
-                        deviceKey =
-                                classState.classIndex.findByEntity(entity);
-                    }
+                if (classState.classIndex != null) {
+                    deviceKey =
+                            classState.classIndex.findByEntity(entity);
                 }
             }
             if (deviceKey != null) {
@@ -998,7 +1029,11 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                 synchronized (deviceKeyLock) {
                     deviceKey = Long.valueOf(deviceKeyCounter++);
                 }
-                device = allocateDevice(deviceKey, entity, classes);
+                device = allocateDevice(deviceKey, entity, entityClass);
+                if (logger.isTraceEnabled()) {
+                    logger.trace("New device created: {} deviceKey={}", 
+                                 device, deviceKey);
+                }
 
                 // Add the new device to the primary map with a simple put
                 deviceMap.put(deviceKey, device);
@@ -1011,7 +1046,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                     continue;
                 }
 
-                updateSecondaryIndices(entity, classes, deviceKey);
+                updateSecondaryIndices(entity, entityClass, deviceKey);
 
                 // generate new device update
                 deviceUpdates =
@@ -1027,9 +1062,20 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                 Date lastSeen = entity.getLastSeenTimestamp();
                 if (lastSeen == null) lastSeen = new Date();
                 device.entities[entityindex].setLastSeenTimestamp(lastSeen);
+                if (device.entities[entityindex].getSwitchDPID() != null &&
+                        device.entities[entityindex].getSwitchPort() != null) {
+                    long sw = device.entities[entityindex].getSwitchDPID();
+                    short port = device.entities[entityindex].getSwitchPort().shortValue();
+                    device.updateAttachmentPoint(sw, port, lastSeen.getTime());
+                }
                 break;
             } else {
-                Device newDevice = allocateDevice(device, entity, classes);
+                Device newDevice = allocateDevice(device, entity);
+                if (entity.getSwitchDPID() != null && entity.getSwitchPort() != null) {
+                    newDevice.updateAttachmentPoint(entity.getSwitchDPID(),
+                                                    entity.getSwitchPort().shortValue(),
+                                                    entity.getLastSeenTimestamp().getTime());
+                }
 
                 // generate updates
                 EnumSet<DeviceField> changedFields =
@@ -1055,7 +1101,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                     continue;
                 }
                 updateSecondaryIndices(entity,
-                                       device.getEntityClasses(),
+                                       device.getEntityClass(),
                                        deviceKey);
                 break;
             }
@@ -1146,6 +1192,41 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
             }
         }
     }
+    
+    /**
+     * Check if the entity e has all the keyFields set. Returns false if not
+     * @param e entity to check 
+     * @param keyFields the key fields to check e against
+     * @return
+     */
+    protected boolean allKeyFieldsPresent(Entity e, EnumSet<DeviceField> keyFields) {
+        for (DeviceField f : keyFields) {
+            switch (f) {
+                case MAC:
+                    // MAC address is always present
+                    break;
+                case IPV4:
+                    if (e.ipv4Address == null) return false;
+                    break;
+                case SWITCH:
+                    if (e.switchDPID == null) return false;
+                    break;
+                case PORT:
+                    if (e.switchPort == null) return false;
+                    break;
+                case VLAN:
+                    // FIXME: vlan==null is ambiguous: it can mean: not present
+                    // or untagged
+                    //if (e.vlan == null) return false;
+                    break;
+                default:
+                    // we should never get here. unless somebody extended 
+                    // DeviceFields
+                    throw new IllegalStateException();
+            }
+        }
+        return true;
+    }
 
     private LinkedList<DeviceUpdate>
     updateUpdates(LinkedList<DeviceUpdate> list, DeviceUpdate update) {
@@ -1178,7 +1259,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
 
     /**
      * Update both the primary and class indices for the provided device.
-     * If the update fails because of aEn concurrent update, will return false.
+     * If the update fails because of an concurrent update, will return false.
      * @param device the device to update
      * @param deviceKey the device key for the device
      * @return true if the update succeeded, false otherwise.
@@ -1187,56 +1268,76 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         if (!primaryIndex.updateIndex(device, deviceKey)) {
             return false;
         }
-        for (IEntityClass clazz : device.getEntityClasses()) {
-            ClassState classState = getClassState(clazz);
+        IEntityClass entityClass = device.getEntityClass();
+        ClassState classState = getClassState(entityClass);
 
-            if (classState.classIndex != null) {
-                if (!classState.classIndex.updateIndex(device,
-                                                       deviceKey))
-                    return false;
-            }
+        if (classState.classIndex != null) {
+            if (!classState.classIndex.updateIndex(device,
+                                                   deviceKey))
+                return false;
         }
-        return true;
+    return true;
     }
 
     /**
      * Update the secondary indices for the given entity and associated
      * entity classes
      * @param entity the entity to update
-     * @param entityClasses the entity classes for the entity
+     * @param entityClass the entity class for the entity
      * @param deviceKey the device key to set up
      */
     private void updateSecondaryIndices(Entity entity,
-                                        Collection<IEntityClass> entityClasses,
+                                        IEntityClass entityClass,
                                         Long deviceKey) {
         for (DeviceIndex index : secondaryIndexMap.values()) {
             index.updateIndex(entity, deviceKey);
         }
-        for (IEntityClass clazz : entityClasses) {
-            ClassState state = getClassState(clazz);
-            for (DeviceIndex index : state.secondaryIndexMap.values()) {
-                index.updateIndex(entity, deviceKey);
-            }
+        ClassState state = getClassState(entityClass);
+        for (DeviceIndex index : state.secondaryIndexMap.values()) {
+            index.updateIndex(entity, deviceKey);
         }
     }
 
     /**
-     * Update the secondary indices for the given entity and associated
-     * entity classes
-     * @param entity the entity to update
-     * @param entityClasses the entity classes for the entity
-     * @param deviceKey the device key to set up
+     * Flush and/or reclassify all entities in a class
+     *
+     * @param entityClass the class to flush.  If null, flush all classes
+     * @param reclassify if true, begin an asynchronous task to reclassify the
+     * flushed entities
      */
-    private void updateSecondaryIndices(Entity entity,
-                                        IEntityClass[] entityClasses,
-                                        Long deviceKey) {
-        updateSecondaryIndices(entity, Arrays.asList(entityClasses), deviceKey);
+    private void flushEntityCache (Set<String> entityClassChangedSet,
+                                   boolean reclassify) {
+        if (reclassify) return; // TODO
+
+        /*
+         * TODO This can be running at the same time by timer thread. Check
+         * and make sure that this is thread safe.
+         */
+        cleanupEntities(entityClassChangedSet, true);
+    }
+
+    // *********************
+    // IEntityClassListener
+    // *********************
+    @Override
+    public void entityClassChanged (Set<String> entityClassNames) {
+
+        /*
+         * Flush the entire device entity cache for now.
+         */
+        flushEntityCache(entityClassNames, false);
+        return;
     }
 
     /**
      * Clean up expired entities/devices
+     *
+     * @param[in] forceCleanup ForceCleanup of entities irrespective of age
+     * @param[in] specificEntities Cleanup only a specific set of entities
      */
-    protected void cleanupEntities() {
+    protected void cleanupEntities (Set<String> specificEntities,
+                                    boolean forceCleanup) {
+
         Calendar c = Calendar.getInstance();
         c.add(Calendar.MILLISECOND, -ENTITY_TIMEOUT);
         Date cutoff = c.getTime();
@@ -1251,13 +1352,23 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         while (diter.hasNext()) {
             Device d = diter.next();
 
+            /*
+             * If we are cleaning entities for a specific set of devices,
+             * skip if not applicable.
+             */
+            if (specificEntities != null && d.getEntityClass() != null &&
+               !specificEntities.contains(d.getEntityClass().getName())) {
+                continue;
+            }
+
             while (true) {
                 deviceUpdates.clear();
                 toRemove.clear();
                 toKeep.clear();
                 for (Entity e : d.getEntities()) {
-                    if (e.getLastSeenTimestamp() != null &&
-                            0 > e.getLastSeenTimestamp().compareTo(cutoff)) {
+                    if (forceCleanup ||
+                        (e.getLastSeenTimestamp() != null &&
+                         0 > e.getLastSeenTimestamp().compareTo(cutoff))) {
                         // individual entity needs to be removed
                         toRemove.add(e);
                     } else {
@@ -1269,13 +1380,14 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                 }
 
                 for (Entity e : toRemove) {
-                    removeEntity(e, d.getEntityClasses(), d.deviceKey, toKeep);
+                    removeEntity(e, d.getEntityClass(), d.deviceKey, toKeep);
                 }
 
                 if (toKeep.size() > 0) {
                     Device newDevice = allocateDevice(d.getDeviceKey(),
+                                                      d.attachmentPoints,
                                                       toKeep,
-                                                      d.entityClasses);
+                                                      d.entityClass);
 
                     EnumSet<DeviceField> changedFields =
                             EnumSet.noneOf(DeviceField.class);
@@ -1305,29 +1417,23 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
     }
 
     private void removeEntity(Entity removed,
-                              IEntityClass[] classes,
+                              IEntityClass entityClass,
                               Long deviceKey,
                               Collection<Entity> others) {
         for (DeviceIndex index : secondaryIndexMap.values()) {
             index.removeEntityIfNeeded(removed, deviceKey, others);
         }
-        for (IEntityClass clazz : classes) {
-            ClassState classState = getClassState(clazz);
-            for (DeviceIndex index : classState.secondaryIndexMap.values()) {
-                index.removeEntityIfNeeded(removed, deviceKey, others);
-            }
+        ClassState classState = getClassState(entityClass);
+        for (DeviceIndex index : classState.secondaryIndexMap.values()) {
+            index.removeEntityIfNeeded(removed, deviceKey, others);
         }
 
         primaryIndex.removeEntityIfNeeded(removed, deviceKey, others);
 
-        for (IEntityClass clazz : classes) {
-            ClassState classState = getClassState(clazz);
-
-            if (classState.classIndex != null) {
-                classState.classIndex.removeEntityIfNeeded(removed,
-                                                           deviceKey,
-                                                           others);
-            }
+        if (classState.classIndex != null) {
+            classState.classIndex.removeEntityIfNeeded(removed,
+                                                       deviceKey,
+                                                       others);
         }
     }
 
@@ -1336,6 +1442,9 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                                                Integer ipv4Address,
                                                Long switchDPID,
                                                Integer switchPort) {
+        // FIXME: vlan==null is a valid search. Need to handle this
+        // case correctly. Note that the code will still work correctly. 
+        // But we might do a full device search instead of using an index.
         EnumSet<DeviceField> keys = EnumSet.noneOf(DeviceField.class);
         if (macAddress != null) keys.add(DeviceField.MAC);
         if (vlan != null) keys.add(DeviceField.VLAN);
@@ -1357,20 +1466,21 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
 
     protected Device allocateDevice(Long deviceKey,
                                     Entity entity,
-                                    Collection<IEntityClass> entityClasses) {
-        return new Device(this, deviceKey, entity, entityClasses);
+                                    IEntityClass entityClass) {
+        return new Device(this, deviceKey, entity, entityClass);
     }
 
+    // TODO: FIX THIS.
     protected Device allocateDevice(Long deviceKey,
+                                    List<AttachmentPoint> aps,
                                     Collection<Entity> entities,
-                                    IEntityClass[] entityClasses) {
-        return new Device(this, deviceKey, entities, entityClasses);
+                                    IEntityClass entityClass) {
+        return new Device(this, deviceKey, aps, entities, entityClass);
     }
 
     protected Device allocateDevice(Device device,
-                                    Entity entity,
-                                    Collection<IEntityClass> entityClasses) {
-        return new Device(device, entity, entityClasses);
+                                    Entity entity) {
+        return new Device(device, entity);
     }
 
     @Override

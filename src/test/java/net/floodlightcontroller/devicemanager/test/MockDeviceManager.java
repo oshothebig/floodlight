@@ -2,11 +2,15 @@ package net.floodlightcontroller.devicemanager.test;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
+import java.util.List;
 import java.util.Set;
 
 import net.floodlightcontroller.devicemanager.IDevice;
 import net.floodlightcontroller.devicemanager.IDeviceListener;
 import net.floodlightcontroller.devicemanager.IEntityClass;
+import net.floodlightcontroller.devicemanager.IEntityClassifierService;
+import net.floodlightcontroller.devicemanager.internal.AttachmentPoint;
 import net.floodlightcontroller.devicemanager.internal.Device;
 import net.floodlightcontroller.devicemanager.internal.DeviceManagerImpl;
 import net.floodlightcontroller.devicemanager.internal.Entity;
@@ -16,6 +20,18 @@ import net.floodlightcontroller.devicemanager.internal.Entity;
  * @author readams
  */
 public class MockDeviceManager extends DeviceManagerImpl {
+    /**
+     * Set a new IEntityClassifier
+     * Use this as a quick way to use a particular entity classifier in a 
+     * single test without having to setup the full FloodlightModuleContext
+     * again.
+     * @param ecs 
+     */
+    public void setEntityClassifier(IEntityClassifierService ecs) {
+        this.entityClassifier = ecs;
+        this.startUp(null);
+    }
+    
     /**
      * Learn a device using the given characteristics. 
      * @param macAddress the MAC
@@ -42,7 +58,7 @@ public class MockDeviceManager extends DeviceManagerImpl {
             ipv4Address = null;
         IDevice res =  learnDeviceByEntity(new Entity(macAddress, vlan, 
                                                       ipv4Address, switchDPID, 
-                                                      switchPort, null));
+                                                      switchPort, new Date()));
         deviceListeners = listeners;
         return res;
     }
@@ -66,21 +82,21 @@ public class MockDeviceManager extends DeviceManagerImpl {
     @Override
     protected Device allocateDevice(Long deviceKey,
                                     Entity entity, 
-                                    Collection<IEntityClass> entityClasses) {
-        return new MockDevice(this, deviceKey, entity, entityClasses);
+                                    IEntityClass entityClass) {
+        return new MockDevice(this, deviceKey, entity, entityClass);
     }
     
     @Override
     protected Device allocateDevice(Long deviceKey,
-                                    Collection<Entity> entities, 
-                                    IEntityClass[] entityClasses) {
-        return new MockDevice(this, deviceKey, entities, entityClasses);
+                                    List<AttachmentPoint> aps,
+                                    Collection<Entity> entities,
+                                    IEntityClass entityClass) {
+        return new MockDevice(this, deviceKey, aps, entities, entityClass);
     }
     
     @Override
     protected Device allocateDevice(Device device,
-                                    Entity entity, 
-                                    Collection<IEntityClass> entityClasses) {
-        return new MockDevice(device, entity, entityClasses);
+                                    Entity entity) {
+        return new MockDevice(device, entity);
     }
 }
