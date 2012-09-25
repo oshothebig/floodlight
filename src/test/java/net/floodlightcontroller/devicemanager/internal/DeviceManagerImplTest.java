@@ -700,6 +700,7 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
                                          EasyMock.anyLong(),
                                          EasyMock.anyShort())).andReturn(false).
                                          anyTimes();
+        expect(mockTopology.getL2DomainId(EasyMock.anyLong())).andReturn(1L).anyTimes();
         replay(mockTopology);
 
         Date currentDate = new Date();
@@ -868,6 +869,10 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
     }
 
     public void doTestDeviceExpiration() throws Exception {
+        IDeviceListener mockListener =
+                createStrictMock(IDeviceListener.class);
+        mockListener.deviceRemoved(isA(IDevice.class));
+        
         Calendar c = Calendar.getInstance();
         c.add(Calendar.MILLISECOND, -DeviceManagerImpl.ENTITY_TIMEOUT-1);
         Entity entity1 = new Entity(1L, null, 1, 1L, 1, c.getTime());
@@ -896,6 +901,8 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         d = deviceManager.learnDeviceByEntity(entity1);
         assertArrayEquals(new Integer[] { 1, 2 }, d.getIPv4Addresses());
 
+        deviceManager.addListener(mockListener);
+        replay(mockListener);
         deviceManager.entityCleanupTask.reschedule(0, null);
 
         IDevice r = deviceManager.getDevice(d.getDeviceKey());
@@ -906,6 +913,8 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
 
         r = deviceManager.findDevice(1L, null, null, null, null);
         assertNull(r);
+        
+        verify(mockListener);
     }
     
     /*
@@ -1259,6 +1268,7 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         expect(mockTopology.isAttachmentPointPort(anyLong(),
                                                   anyShort())).
                                                   andReturn(true).anyTimes();
+        expect(mockTopology.getL2DomainId(EasyMock.anyLong())).andReturn(1L).anyTimes();
         replay(mockTopology);
         doTestDeviceQuery();
     }
@@ -1270,6 +1280,7 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         expect(mockTopology.isAttachmentPointPort(anyLong(),
                                                   anyShort())).
                                                   andReturn(true).anyTimes();
+        expect(mockTopology.getL2DomainId(EasyMock.anyLong())).andReturn(1L).anyTimes();
         replay(mockTopology);
         
         doTestDeviceQuery();
@@ -1339,6 +1350,7 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         expect(mockTopology.isAttachmentPointPort(anyLong(),
                                                   anyShort())).
                                                   andReturn(true).anyTimes();
+        expect(mockTopology.getL2DomainId(EasyMock.anyLong())).andReturn(1L).anyTimes();
         replay(mockTopology);
 
         doTestDeviceClassQuery();
@@ -1351,11 +1363,12 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         expect(mockTopology.isAttachmentPointPort(anyLong(),
                                                   anyShort())).
                                                   andReturn(true).anyTimes();
+        expect(mockTopology.getL2DomainId(EasyMock.anyLong())).andReturn(1L).anyTimes();
         replay(mockTopology);
 
         doTestDeviceClassQuery();
     }
-    
+
     @Test
     public void testFindDevice() {
         boolean exceptionCaught;
@@ -1367,6 +1380,7 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         expect(mockTopology.isAttachmentPointPort(anyLong(),
                                                   anyShort())).
                                                   andReturn(true).anyTimes();
+        expect(mockTopology.getL2DomainId(EasyMock.anyLong())).andReturn(1L).anyTimes();
         replay(mockTopology);
 
         Entity entity1 = new Entity(1L, (short)1, 1, 1L, 1, new Date());

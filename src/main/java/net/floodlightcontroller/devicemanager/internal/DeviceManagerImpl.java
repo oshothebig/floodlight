@@ -558,9 +558,6 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
             default:
             	break;
         }
-
-        logger.error("received an unexpected message {} from switch {}",
-                     msg, sw);
         return Command.CONTINUE;
     }
 
@@ -697,7 +694,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         if (restApi != null) {
             restApi.addRestletRoutable(new DeviceRoutable());
         } else {
-            logger.error("Could not instantiate REST API");
+            logger.debug("Could not instantiate REST API");
         }
     }
 
@@ -1058,7 +1055,11 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
             } else {
                 // If the secondary index does not contain the entity,
                 // create a new Device object containing the entity, and
-                // generate a new device ID
+                // generate a new device ID. However, we first check if 
+                // the entity is allowed (e.g., for spoofing protection)
+                if (!isEntityAllowed(entity, entityClass)) {
+                    return null;
+                }
                 synchronized (deviceKeyLock) {
                     deviceKey = Long.valueOf(deviceKeyCounter++);
                 }
@@ -1089,6 +1090,9 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                 break;
             }
 
+            if (!isEntityAllowed(entity, device.getEntityClass())) {
+                return null;
+            }
             int entityindex = -1;
             if ((entityindex = device.entityIndex(entity)) >= 0) {
                 // update timestamp on the found entity
@@ -1195,6 +1199,10 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         return device;
     }
 
+    protected boolean isEntityAllowed(Entity entity, IEntityClass entityClass) {
+        return true;
+    }
+
     protected EnumSet<DeviceField> findChangedFields(Device device,
                                                      Entity newEntity) {
         EnumSet<DeviceField> changedFields =
@@ -1266,8 +1274,8 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                                     listener.deviceVlanChanged(update.device);
                                     break;
                                 default:
-                                	logger.error("Unknown device field changed {}",
-                                				update.fieldsChanged.toString());
+                                	logger.debug("Unknown device field changed {}",
+                                				 update.fieldsChanged.toString());
                                 	break;
                             }
                         }
@@ -1464,8 +1472,6 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                         d = deviceMap.get(d.getDeviceKey());
                         if (null != d)
                             continue;
-                        else
-                            break;
                     }
                 } else {
                     deviceUpdates.add(new DeviceUpdate(d, DELETE, null));
@@ -1476,8 +1482,6 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                         d = deviceMap.get(d.getDeviceKey());
                         if (null != d)
                             continue;
-                        else
-                            break;
                 }
                 processUpdates(deviceUpdates);
                 break;
@@ -1518,8 +1522,9 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
     				device.getDeviceKey(), emptyToKeep);
     	}
     	if (!deviceMap.remove(device.getDeviceKey(), device)) {
-    		logger.info("device map does not have this device -" + 
-    	                 device.toString());
+    	    if (logger.isDebugEnabled())
+    	        logger.debug("device map does not have this device -" + 
+    	                     device.toString());
     	}
     }
 
