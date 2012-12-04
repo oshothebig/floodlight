@@ -30,7 +30,9 @@ import net.floodlightcontroller.core.util.SingletonTask;
 import net.floodlightcontroller.counter.ICounterStoreService;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryListener;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
+import net.floodlightcontroller.packet.BSN;
 import net.floodlightcontroller.packet.Ethernet;
+import net.floodlightcontroller.packet.LLDP;
 import net.floodlightcontroller.restserver.IRestApiService;
 import net.floodlightcontroller.routing.IRoutingService;
 import net.floodlightcontroller.routing.Link;
@@ -118,6 +120,8 @@ public class TopologyManager implements
      */
     protected boolean dtLinksUpdated;
 
+    protected final int TOPOLOGY_COMPUTE_INTERVAL_MS = 500;
+
     /**
      * Thread for recomputing topology.  The thread is always running, 
      * however the function applyUpdates() has a blocking call.
@@ -131,10 +135,15 @@ public class TopologyManager implements
         @Override 
         public void run() {
             try {
-                updateTopology();
+                if (ldUpdates.peek() != null)
+                    updateTopology();
             }
             catch (Exception e) {
                 log.error("Error in topology instance task thread", e);
+            } finally {
+                if (floodlightProvider.getRole() != Role.SLAVE)
+                    newInstanceTask.reschedule(TOPOLOGY_COMPUTE_INTERVAL_MS,
+                                           TimeUnit.MILLISECONDS);
             }
         }
     }
@@ -153,23 +162,20 @@ public class TopologyManager implements
     // **********************
     // ILinkDiscoveryListener
     // **********************
+    @Override
+    public void linkDiscoveryUpdate(List<LDUpdate> updateList) {
+        if (log.isTraceEnabled()) {
+            log.trace("Queuing update: {}", updateList);
+        }
+        ldUpdates.addAll(updateList);
+    }
 
     @Override
     public void linkDiscoveryUpdate(LDUpdate update) {
-        boolean scheduleFlag = false;
-        // if there's no udpates in the queue, then
-        // we need to schedule an update.
-        if (ldUpdates.peek() == null)
-            scheduleFlag = true;
-
         if (log.isTraceEnabled()) {
             log.trace("Queuing update: {}", update);
         }
         ldUpdates.add(update);
-
-        if (scheduleFlag) {
-            newInstanceTask.reschedule(1, TimeUnit.MICROSECONDS);
-        }
     }
     
     // ****************
@@ -197,6 +203,13 @@ public class TopologyManager implements
     @Override
     public boolean isAttachmentPointPort(long switchid, short port, 
                                          boolean tunnelEnabled) {
+
+        // If the switch port is a tunnel endpoint, it is not
+        // an attachment point port, irrespective of whether
+        // a link is found through it or not.
+        if (linkDiscovery.isTunnelPort(switchid, port))
+            return false;
+
         TopologyInstance ti = getCurrentInstance(tunnelEnabled);
 
         // if the port is not attachment point port according to
@@ -573,12 +586,14 @@ public class TopologyManager implements
                 if (oldRole == Role.SLAVE) {
                     log.debug("Re-computing topology due " +
                             "to HA change from SLAVE->MASTER");
-                    newInstanceTask.reschedule(1, TimeUnit.MILLISECONDS);
+                    newInstanceTask.reschedule(TOPOLOGY_COMPUTE_INTERVAL_MS,
+                                               TimeUnit.MILLISECONDS);
                 }
                 break;
             case SLAVE:
                 log.debug("Clearing topology due to " +
                         "HA change to SLAVE");
+                ldUpdates.clear();
                 clearCurrentTopology();
                 break;
             default:
@@ -657,6 +672,11 @@ public class TopologyManager implements
     public void startUp(FloodlightModuleContext context) {
         ScheduledExecutorService ses = threadPool.getScheduledExecutor();
         newInstanceTask = new SingletonTask(ses, new UpdateTopologyWorker());
+
+        if (floodlightProvider.getRole() != Role.SLAVE)
+            newInstanceTask.reschedule(TOPOLOGY_COMPUTE_INTERVAL_MS,
+                                   TimeUnit.MILLISECONDS);
+
         linkDiscovery.addListener(this);
         floodlightProvider.addOFMessageListener(OFType.PACKET_IN, this);
         floodlightProvider.addHAListener(this);
@@ -829,7 +849,16 @@ public class TopologyManager implements
                 IFloodlightProviderService.bcStore.
                 get(cntx,IFloodlightProviderService.CONTEXT_PI_PAYLOAD);
 
-        if (eth.getEtherType() == Ethernet.TYPE_BDDP) {
+        if (eth.getEtherType() == Ethernet.TYPE_BSN) {
+            BSN bsn = (BSN) eth.getPayload();
+            if (bsn == null) return Command.STOP;
+            if (bsn.getPayload() == null) return Command.STOP;
+
+            // It could be a packet other than BSN LLDP, therefore
+            // continue with the regular processing.
+            if (bsn.getPayload() instanceof LLDP == false)
+                return Command.CONTINUE;
+
             doFloodBDDP(sw.getId(), pi, cntx);
         } else {
             return dropFilter(sw.getId(), pi, cntx);
@@ -837,12 +866,18 @@ public class TopologyManager implements
         return Command.STOP;
     }
 
+
+    /**
+     * Updates concerning switch disconnect and port down are not processed.
+     * LinkDiscoveryManager is expected to process those messages and send
+     * multiple link removed messages.  However, all the updates from
+     * LinkDiscoveryManager would be propagated to the listeners of topology.
+     */
     @LogMessageDoc(level="ERROR",
             message="Error reading link discovery update.",
             explanation="Unable to process link discovery update",
             recommendation=LogMessageDoc.REPORT_CONTROLLER_BUG)
     public void applyUpdates() {
-
         appliedUpdates.clear();
         LDUpdate update = null;
         while (ldUpdates.peek() != null) {
@@ -861,12 +896,7 @@ public class TopologyManager implements
             } else if (update.getOperation() == UpdateOperation.LINK_REMOVED){
                 removeLink(update.getSrc(), update.getSrcPort(), 
                            update.getDst(), update.getDstPort());
-            } else if (update.getOperation() == UpdateOperation.SWITCH_REMOVED) {
-                removeSwitch(update.getSrc());
-            } else if (update.getOperation() == UpdateOperation.PORT_DOWN) {
-                removeSwitchPort(update.getSrc(), update.getSrcPort());
             }
-
             // Add to the list of applied updates.
             appliedUpdates.add(update);
         }
@@ -888,24 +918,43 @@ public class TopologyManager implements
 
         Map<NodePortTuple, Set<Link>> openflowLinks;
         openflowLinks = 
-                new HashMap<NodePortTuple, Set<Link>>(switchPortLinks);
+                new HashMap<NodePortTuple, Set<Link>>();
+        Set<NodePortTuple> nptList = switchPortLinks.keySet();
+
+        if (nptList != null) {
+            for(NodePortTuple npt: nptList) {
+                Set<Link> linkSet = switchPortLinks.get(npt);
+                if (linkSet == null) continue;
+                openflowLinks.put(npt, new HashSet<Link>(linkSet));
+            }
+        }
+
+        // Identify all broadcast domain ports.
+        // Mark any port that has inconsistent set of links
+        // as broadcast domain ports as well.
+        Set<NodePortTuple> broadcastDomainPorts =
+                identifyBroadcastDomainPorts();
+
+        // Remove all links incident on broadcast domain ports.
+        for(NodePortTuple npt: broadcastDomainPorts) {
+            if (switchPortLinks.get(npt) == null) continue;
+            for(Link link: switchPortLinks.get(npt)) {
+                removeLinkFromStructure(openflowLinks, link);
+            }
+        }
 
         // Remove all tunnel links.
         for(NodePortTuple npt: tunnelLinks.keySet()) {
-            if (openflowLinks.get(npt) != null)
-                openflowLinks.remove(npt);
-        }
-
-        // Remove all broadcast domain links.
-        for(NodePortTuple npt: portBroadcastDomainLinks.keySet()) {
-            if (openflowLinks.get(npt) != null)
-                openflowLinks.remove(npt);
+            if (switchPortLinks.get(npt) == null) continue;
+            for(Link link: switchPortLinks.get(npt)) {
+                removeLinkFromStructure(openflowLinks, link);
+            }
         }
 
         TopologyInstance nt = new TopologyInstance(switchPorts, 
                                                    blockedPorts,
                                                    openflowLinks, 
-                                                   portBroadcastDomainLinks.keySet(), 
+                                                   broadcastDomainPorts,
                                                    tunnelLinks.keySet());
         nt.compute();
         // We set the instances with and without tunnels to be identical.
@@ -914,6 +963,66 @@ public class TopologyManager implements
         currentInstanceWithoutTunnels = nt;
         return true;
     }
+
+    /**
+     *  We expect every switch port to have at most two links.  Both these
+     *  links must be unidirectional links connecting to the same switch port.
+     *  If not, we will mark this as a broadcast domain port.
+     */
+    protected Set<NodePortTuple> identifyBroadcastDomainPorts() {
+
+        Set<NodePortTuple> broadcastDomainPorts =
+                new HashSet<NodePortTuple>();
+        broadcastDomainPorts.addAll(this.portBroadcastDomainLinks.keySet());
+
+        Set<NodePortTuple> additionalNpt =
+                new HashSet<NodePortTuple>();
+
+        // Copy switchPortLinks
+        Map<NodePortTuple, Set<Link>> spLinks =
+                new HashMap<NodePortTuple, Set<Link>>();
+        for(NodePortTuple npt: switchPortLinks.keySet()) {
+            spLinks.put(npt, new HashSet<Link>(switchPortLinks.get(npt)));
+        }
+
+        for(NodePortTuple npt: spLinks.keySet()) {
+            Set<Link> links = spLinks.get(npt);
+            boolean bdPort = false;
+            ArrayList<Link> linkArray = new ArrayList<Link>();
+            if (links.size() > 2) {
+                bdPort = true;
+            } else if (links.size() == 2) {
+                for(Link l: links) {
+                    linkArray.add(l);
+                }
+                // now, there should be two links in [0] and [1].
+                Link l1 = linkArray.get(0);
+                Link l2 = linkArray.get(1);
+
+                // check if these two are symmetric.
+                if (l1.getSrc() != l2.getDst() ||
+                        l1.getSrcPort() != l2.getDstPort() ||
+                        l1.getDst() != l2.getSrc() ||
+                        l1.getDstPort() != l2.getSrcPort()) {
+                    bdPort = true;
+                }
+            }
+
+            if (bdPort && (broadcastDomainPorts.contains(npt) == false)) {
+                additionalNpt.add(npt);
+            }
+        }
+
+        if (additionalNpt.size() > 0) {
+            log.warn("The following switch ports have multiple " +
+                    "links incident on them, so these ports will be treated " +
+                    " as braodcast domain ports. {}", additionalNpt);
+
+            broadcastDomainPorts.addAll(additionalNpt);
+        }
+        return broadcastDomainPorts;
+    }
+
 
 
     public void informListeners() {
@@ -1103,7 +1212,7 @@ public class TopologyManager implements
     * Clears the current topology. Note that this does NOT
     * send out updates.
     */
-    private void clearCurrentTopology() {
+    public void clearCurrentTopology() {
         this.clear();
         linksUpdated = true;
         dtLinksUpdated = true;

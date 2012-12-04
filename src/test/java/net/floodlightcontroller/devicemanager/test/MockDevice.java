@@ -42,8 +42,8 @@ public class MockDevice extends Device {
         super(deviceManager, deviceKey, entity, entityClass);
     }
 
-    public MockDevice(Device device, Entity newEntity) {
-        super(device, newEntity);
+    public MockDevice(Device device, Entity newEntity, int insertionpoint) {
+        super(device, newEntity, insertionpoint);
     }
     
     public MockDevice(DeviceManagerImpl deviceManager, Long deviceKey,
@@ -79,5 +79,13 @@ public class MockDevice extends Device {
             }
         }
         return vals.toArray(new SwitchPort[vals.size()]);
+    }
+    
+    @Override
+    public String toString() {
+        String rv = "MockDevice[entities=+";
+        rv += entities.toString();
+        rv += "]";
+        return rv;
     }
 }

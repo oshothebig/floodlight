@@ -26,6 +26,12 @@ import net.floodlightcontroller.topology.NodePortTuple;
 
 
 public interface ILinkDiscoveryService extends IFloodlightService {
+
+    /**
+     * Returns if a given switchport is a tunnel endpoint or not
+     */
+    public boolean isTunnelPort(long sw, short port);
+
     /**
      * Retrieves a map of all known link connections between OpenFlow switches
      * and the associated info (valid time, port states) for the link.
@@ -70,4 +76,15 @@ public interface ILinkDiscoveryService extends IFloodlightService {
      * Get the set of quarantined ports on a switch
      */
     public Set<Short> getQuarantinedPorts(long sw);
+
+    /**
+     * Get the status of auto port fast feature.
+     */
+    public boolean isAutoPortFastFeature();
+
+    /**
+     * Set the state for auto port fast feature.
+     * @param autoPortFastFeature
+     */
+    public void setAutoPortFastFeature(boolean autoPortFastFeature);
 }

@@ -33,7 +33,8 @@ import org.openflow.protocol.factory.BasicFactory;
  *
  * @author David Erickson (daviderickson@cs.stanford.edu)
  */
-public interface IFloodlightProviderService extends IFloodlightService {
+public interface IFloodlightProviderService extends
+        IFloodlightService {
 
     /**
      * A value stored in the floodlight context containing a parsed packet
@@ -198,5 +199,20 @@ public interface IFloodlightProviderService extends IFloodlightService {
     * @return
     */
    public long getSystemStartTime();
+   
+   /**
+    * Configure controller to always clear the flow table on the switch,
+    * when it connects to controller. This will be true for first time switch
+    * reconnect, as well as a switch re-attaching to Controller after HA
+    * switch over to ACTIVE role
+    */
+   public void setAlwaysClearFlowsOnSwAdd(boolean value);
+   
+   /**
+    * Adds an OFSwitch driver
+    * @param desc The starting portion of switch's manufacturer string
+    * @param driver The object implementing OFSwitchDriver interface
+    */
+   public void addOFSwitchDriver(String desc, IOFSwitchDriver driver);
 
 }

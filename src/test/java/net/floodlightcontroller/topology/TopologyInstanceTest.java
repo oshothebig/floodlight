@@ -12,11 +12,13 @@ import net.floodlightcontroller.core.module.FloodlightModuleContext;
 import net.floodlightcontroller.core.test.MockFloodlightProvider;
 import net.floodlightcontroller.core.test.MockThreadPoolService;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscovery;
+import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
 import net.floodlightcontroller.topology.NodePortTuple;
 import net.floodlightcontroller.topology.TopologyInstance;
 import net.floodlightcontroller.topology.TopologyManager;
 
+import org.easymock.EasyMock;
 import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -26,6 +28,7 @@ public class TopologyInstanceTest {
     protected static Logger log = LoggerFactory.getLogger(TopologyInstanceTest.class);
     protected TopologyManager topologyManager;
     protected FloodlightModuleContext fmc;
+    protected ILinkDiscoveryService linkDiscovery;
     protected MockFloodlightProvider mockFloodlightProvider;
 
     protected int DIRECT_LINK = 1;
@@ -35,8 +38,10 @@ public class TopologyInstanceTest {
     @Before 
     public void SetUp() throws Exception {
         fmc = new FloodlightModuleContext();
+        linkDiscovery = EasyMock.createMock(ILinkDiscoveryService.class);
         mockFloodlightProvider = new MockFloodlightProvider();
         fmc.addService(IFloodlightProviderService.class, mockFloodlightProvider);
+        fmc.addService(ILinkDiscoveryService.class, linkDiscovery);
         MockThreadPoolService tp = new MockThreadPoolService();
         topologyManager  = new TopologyManager();
         fmc.addService(IThreadPoolService.class, tp);
@@ -513,6 +518,50 @@ public class TopologyInstanceTest {
             topologyManager.createNewInstance();
             verifyClusters(expectedClusters, false);
             verifyExpectedBroadcastPortsInClusters(expectedBroadcastPorts);
+        }
+    }
+
+    @Test
+    public void testLinkRemovalOnBroadcastDomainPorts() throws Exception {
+        {
+            int [][] linkArray = {
+                                  {1, 1, 2, 1, DIRECT_LINK},
+                                  {2, 1, 1, 1, DIRECT_LINK},
+                                  {1, 2, 3, 1, DIRECT_LINK},
+                                  {3, 1, 1, 2, DIRECT_LINK},
+                                  {2, 2, 3, 2, DIRECT_LINK},
+                                  {3, 2, 2, 2, DIRECT_LINK},
+                                  {1, 1, 3, 2, DIRECT_LINK},
+                                  // the last link should make ports
+                                  // (1,1) and (3,2) to be broadcast
+                                  // domain ports, hence all links
+                                  // from these ports must be eliminated.
+            };
+
+            int [][] expectedClusters = {
+                                         {1, 3}, {2},
+            };
+            createTopologyFromLinks(linkArray);
+            topologyManager.createNewInstance();
+            if (topologyManager.getCurrentInstance() instanceof TopologyInstance)
+                verifyClusters(expectedClusters);
+        }
+        {
+            int [][] linkArray = {
+                                  {1, 2, 3, 2, DIRECT_LINK},
+                                  // the last link should make ports
+                                  // (1,1) and (3,2) to be broadcast
+                                  // domain ports, hence all links
+                                  // from these ports must be eliminated.
+            };
+
+            int [][] expectedClusters = {
+                                         {1}, {3}, {2},
+            };
+            createTopologyFromLinks(linkArray);
+            topologyManager.createNewInstance();
+            if (topologyManager.getCurrentInstance() instanceof TopologyInstance)
+                verifyClusters(expectedClusters);
         }
     }
 }

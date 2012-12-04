@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import net.floodlightcontroller.linkdiscovery.ILinkDiscovery.LinkType;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscoveryService;
 import net.floodlightcontroller.linkdiscovery.LinkInfo;
 import net.floodlightcontroller.routing.Link;
@@ -25,11 +26,14 @@ public class LinksResource extends ServerResource {
             links.putAll(ld.getLinks());
             for (Link link: links.keySet()) {
                 LinkInfo info = links.get(link);
+                LinkType type = ld.getLinkType(link, info);
                 LinkWithType lwt = new LinkWithType(link,
                                                     info.getSrcPortState(),
                                                     info.getDstPortState(),
-                                                    ld.getLinkType(link, info));
-                returnLinkSet.add(lwt);
+                                                    type);
+
+                if (type == LinkType.DIRECT_LINK || type == LinkType.TUNNEL)
+                    returnLinkSet.add(lwt);
             }
         }
         return returnLinkSet;
