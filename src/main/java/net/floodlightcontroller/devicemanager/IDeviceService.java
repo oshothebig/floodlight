@@ -30,6 +30,7 @@ import net.floodlightcontroller.core.module.IFloodlightService;
  * from the {@link FloodlightContext} rather than from {@link IDeviceManager}.
  */
 public interface IDeviceService extends IFloodlightService {
+
     /**
      * Fields used in devices for indexes and querying
      * @see IDeviceService#addIndex
@@ -189,6 +190,7 @@ public interface IDeviceService extends IFloodlightService {
      * Adds a listener to listen for IDeviceManagerServices notifications
      * 
      * @param listener The listener that wants the notifications
+     * @param type     The type of the listener
      */
     public void addListener(IDeviceListener listener);
     
@@ -198,8 +200,8 @@ public interface IDeviceService extends IFloodlightService {
      * @param sw
      * @param port
      */
-	public void addSuppressAPs(long swId, short port);
+    public void addSuppressAPs(long swId, short port);
 
-	public void removeSuppressAPs(long swId, short port);
+    public void removeSuppressAPs(long swId, short port);
 
 }

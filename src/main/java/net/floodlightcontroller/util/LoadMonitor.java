@@ -1,3 +1,19 @@
+/**
+ *    Copyright 2013, Big Switch Networks, Inc.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License"); you may
+ *    not use this file except in compliance with the License. You may obtain
+ *    a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ *    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ *    License for the specific language governing permissions and limitations
+ *    under the License.
+ **/
+
 package net.floodlightcontroller.util;
 
 import java.io.BufferedReader;
@@ -189,17 +205,23 @@ public class LoadMonitor implements Runnable {
 
     protected long readIdle() {
         long idle = 0;
-
+        FileInputStream fs = null;
+        BufferedReader reader = null;
         try {
-            FileInputStream fs = new FileInputStream("/proc/stat");
-            BufferedReader reader =
-                new BufferedReader(new InputStreamReader(fs));
-            idle = Long.parseLong(reader.readLine().split("\\s+")[4]);
-            reader.close();
-            fs.close();
-        }
-        catch (IOException ex) {
-            ex.printStackTrace();
+            try {
+                fs = new FileInputStream("/proc/stat");
+                reader = new BufferedReader(new InputStreamReader(fs));
+                String line = reader.readLine();
+                if (line == null) throw new IOException("Empty file");
+                idle = Long.parseLong(line.split("\\s+")[4]);
+            } finally {
+                if (reader != null)
+                    reader.close();
+                if (fs != null)
+                    fs.close();
+            }
+        } catch (IOException ex) {
+            log.error("Error reading idle time from /proc/stat", ex);
         }
         return idle;
 

@@ -62,6 +62,7 @@ public class Device implements IDevice {
     protected String macAddressString;
     // the vlan Ids from the entities of this device
     protected Short[] vlanIds;
+    protected String dhcpClientName;
     
    
 
@@ -97,6 +98,7 @@ public class Device implements IDevice {
         this.entityClass = entityClass;
         Arrays.sort(this.entities);
 
+        this.dhcpClientName = null;
         this.oldAPs = null;
         this.attachmentPoints = null;
 
@@ -126,12 +128,14 @@ entity.getLastSeenTimestamp().getTime());
      */
     public Device(DeviceManagerImpl deviceManager,
                   Long deviceKey,
+                  String dhcpClientName,
                   Collection<AttachmentPoint> oldAPs,
                   Collection<AttachmentPoint> attachmentPoints,
                   Collection<Entity> entities,
                   IEntityClass entityClass) {
         this.deviceManager = deviceManager;
         this.deviceKey = deviceKey;
+        this.dhcpClientName = dhcpClientName;
         this.entities = entities.toArray(new Entity[entities.size()]);
         this.oldAPs = null;
         this.attachmentPoints = null;
@@ -167,6 +171,7 @@ entity.getLastSeenTimestamp().getTime());
                   int insertionpoint) {
         this.deviceManager = device.deviceManager;
         this.deviceKey = device.deviceKey;
+        this.dhcpClientName = device.dhcpClientName;
         
         this.entities = new Entity[device.entities.length + 1];
         if (insertionpoint < 0) {
@@ -458,11 +463,14 @@ entity.getLastSeenTimestamp().getTime());
         } else  if (oldAPFlag) {
             // retain oldAP  as is.  Put the newAP in oldAPs for flagging
             // possible duplicates.
-                oldAPList = new ArrayList<AttachmentPoint>();
-                if (oldAPs != null) oldAPList.addAll(oldAPs);
-                // Add ot oldAPList only if it was picked up from the oldAPList
-                oldAPList.add(newAP);
-                this.oldAPs = oldAPList;
+            oldAPList = new ArrayList<AttachmentPoint>();
+            if (oldAPs != null) oldAPList.addAll(oldAPs);
+            // Add to oldAPList only if it was picked up from the oldAPList
+            oldAPList.add(newAP);
+            this.oldAPs = oldAPList;
+            if (!topology.isInSameBroadcastDomain(oldAP.getSw(), oldAP.getPort(),
+                                                  newAP.getSw(), newAP.getPort()))
+                return true; // attachment point changed.
         }
         return false;
     }
@@ -703,6 +711,10 @@ entity.getLastSeenTimestamp().getTime());
 
     public Entity[] getEntities() {
         return entities;
+    }
+
+    public String getDHCPClientName() {
+        return dhcpClientName;
     }
 
     // ***************

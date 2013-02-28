@@ -29,7 +29,6 @@ import net.floodlightcontroller.core.FloodlightContext;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFSwitch;
 import net.floodlightcontroller.core.module.FloodlightModuleContext;
-import net.floodlightcontroller.core.test.MockFloodlightProvider;
 import net.floodlightcontroller.core.test.MockThreadPoolService;
 import net.floodlightcontroller.devicemanager.internal.DefaultEntityClassifier;
 import net.floodlightcontroller.devicemanager.test.MockDeviceManager;
@@ -72,7 +71,6 @@ import org.openflow.protocol.action.OFActionOutput;
 import org.openflow.util.HexString;
 
 public class ForwardingTest extends FloodlightTestCase {
-    protected MockFloodlightProvider mockFloodlightProvider;
     protected FloodlightContext cntx;
     protected MockDeviceManager deviceManager;
     protected IRoutingService routingEngine;
@@ -337,7 +335,7 @@ public class ForwardingTest extends FloodlightTestCase {
         nptList.add(new NodePortTuple(2L, (short)1));
         nptList.add(new NodePortTuple(2L, (short)3));
         route.setPath(nptList);
-        expect(routingEngine.getRoute(1L, (short)1, 2L, (short)3)).andReturn(route).atLeastOnce();
+        expect(routingEngine.getRoute(1L, (short)1, 2L, (short)3, 0)).andReturn(route).atLeastOnce();
 
         // Expected Flow-mods
         OFMatch match = new OFMatch();
@@ -400,7 +398,7 @@ public class ForwardingTest extends FloodlightTestCase {
         Route route = new  Route(1L, 1L);
         route.getPath().add(new NodePortTuple(1L, (short)1));
         route.getPath().add(new NodePortTuple(1L, (short)3));
-        expect(routingEngine.getRoute(1L, (short)1, 1L, (short)3)).andReturn(route).atLeastOnce();
+        expect(routingEngine.getRoute(1L, (short)1, 1L, (short)3, 0)).andReturn(route).atLeastOnce();
 
         // Expected Flow-mods
         OFMatch match = new OFMatch();
@@ -451,7 +449,7 @@ public class ForwardingTest extends FloodlightTestCase {
         Route route = new  Route(1L, 1L);
         route.getPath().add(new NodePortTuple(1L, (short)1));
         route.getPath().add(new NodePortTuple(1L, (short)3));
-        expect(routingEngine.getRoute(1L, (short)1, 1L, (short)3)).andReturn(route).atLeastOnce();
+        expect(routingEngine.getRoute(1L, (short)1, 1L, (short)3, 0)).andReturn(route).atLeastOnce();
     
         // Expected Flow-mods
         OFMatch match = new OFMatch();

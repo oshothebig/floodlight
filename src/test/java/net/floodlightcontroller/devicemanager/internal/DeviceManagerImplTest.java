@@ -19,10 +19,10 @@ package net.floodlightcontroller.devicemanager.internal;
 
 
 import static org.easymock.EasyMock.anyLong;
+import static org.easymock.EasyMock.anyObject;
 import static org.easymock.EasyMock.anyShort;
 import static org.easymock.EasyMock.createMock;
 import static org.easymock.EasyMock.createNiceMock;
-import static org.easymock.EasyMock.createStrictMock;
 import static org.easymock.EasyMock.eq;
 import static org.easymock.EasyMock.expect;
 import static org.easymock.EasyMock.expectLastCall;
@@ -47,7 +47,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import net.floodlightcontroller.core.IFloodlightProviderService;
 import net.floodlightcontroller.core.IOFSwitch;
 import net.floodlightcontroller.core.module.FloodlightModuleContext;
-import net.floodlightcontroller.core.test.MockFloodlightProvider;
 import net.floodlightcontroller.core.test.MockThreadPoolService;
 import net.floodlightcontroller.devicemanager.IDevice;
 import net.floodlightcontroller.devicemanager.IDeviceListener;
@@ -80,6 +79,7 @@ import org.junit.Test;
 import org.openflow.protocol.OFPacketIn;
 import org.openflow.protocol.OFPacketIn.OFPacketInReason;
 import org.openflow.protocol.OFPhysicalPort;
+import org.openflow.protocol.OFPort;
 import org.openflow.protocol.OFType;
 import org.openflow.util.HexString;
 import org.slf4j.Logger;
@@ -96,7 +96,6 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
     protected IPacket testARPReqPacket_1, testARPReqPacket_2;
     protected byte[] testARPReplyPacket_1_Srld, testARPReplyPacket_2_Srld;
     private byte[] testARPReplyPacket_3_Serialized;
-    MockFloodlightProvider mockFloodlightProvider;
     DeviceManagerImpl deviceManager;
     MemoryStorageSource storageSource;
     FlowReconcileManager flowReconcileMgr;
@@ -274,9 +273,17 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
     @Test
     public void testEntityLearning() throws Exception {
         IDeviceListener mockListener =
-                createStrictMock(IDeviceListener.class);
+                createMock(IDeviceListener.class);
+        expect(mockListener.getName()).andReturn("mockListener").atLeastOnce();
+        expect(mockListener.isCallbackOrderingPostreq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
+        expect(mockListener.isCallbackOrderingPrereq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
 
+        replay(mockListener);
         deviceManager.addListener(mockListener);
+        verify(mockListener);
+        reset(mockListener);
         deviceManager.entityClassifier= new MockEntityClassifier();
         deviceManager.startUp(null);
 
@@ -480,9 +487,17 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
     @Test
     public void testAttachmentPointLearning() throws Exception {
         IDeviceListener mockListener =
-                createStrictMock(IDeviceListener.class);
+                createMock(IDeviceListener.class);
+        expect(mockListener.getName()).andReturn("mockListener").atLeastOnce();
+        expect(mockListener.isCallbackOrderingPostreq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
+        expect(mockListener.isCallbackOrderingPrereq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
 
+        replay(mockListener);
         deviceManager.addListener(mockListener);
+        verify(mockListener);
+        reset(mockListener);
 
         ITopologyService mockTopology = createMock(ITopologyService.class);
         expect(mockTopology.getL2DomainId(1L)).
@@ -590,7 +605,16 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         IDeviceListener mockListener =
                 createMock(IDeviceListener.class);
 
+        expect(mockListener.getName()).andReturn("mockListener").anyTimes();
+        expect(mockListener.isCallbackOrderingPostreq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
+        expect(mockListener.isCallbackOrderingPrereq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
+
+        replay(mockListener);
         deviceManager.addListener(mockListener);
+        verify(mockListener);
+        reset(mockListener);
 
         ITopologyService mockTopology = createMock(ITopologyService.class);
         expect(mockTopology.getL2DomainId(1L)).
@@ -705,7 +729,16 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         IDeviceListener mockListener =
                 createMock(IDeviceListener.class);
 
+        expect(mockListener.getName()).andReturn("mockListener").anyTimes();
+        expect(mockListener.isCallbackOrderingPostreq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
+        expect(mockListener.isCallbackOrderingPrereq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
+
+        replay(mockListener);
         deviceManager.addListener(mockListener);
+        verify(mockListener);
+        reset(mockListener);
 
         ITopologyService mockTopology = createMock(ITopologyService.class);
         expect(mockTopology.getL2DomainId(1L)).
@@ -868,6 +901,73 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         assertArrayEquals(new SwitchPort[] { new SwitchPort(1L, 2) }, aps);
     }
 
+    /**
+     * This test verifies that the learning behavior on OFPP_LOCAL ports.
+     * Once a host is learned on OFPP_LOCAL, it is allowed to move only from
+     * one OFPP_LOCAL to another OFPP_LOCAL port.
+     * @throws Exception
+     */
+    @Test
+    public void testLOCALAttachmentPointLearning() throws Exception {
+        ITopologyService mockTopology = createMock(ITopologyService.class);
+        expect(mockTopology.getL2DomainId(anyLong())).
+        andReturn(1L).anyTimes();
+        expect(mockTopology.isAttachmentPointPort(anyLong(), anyShort())).
+        andReturn(true).anyTimes();
+        expect(mockTopology.isBroadcastDomainPort(1L, (short)1)).
+        andReturn(false).anyTimes();
+        expect(mockTopology.isBroadcastDomainPort(1L, OFPort.OFPP_LOCAL.getValue())).
+        andReturn(false).anyTimes();
+        expect(mockTopology.isBroadcastDomainPort(1L, (short)2)).
+        andReturn(true).anyTimes();
+        expect(mockTopology.isInSameBroadcastDomain(1L, (short)1,
+                                                    1L, OFPort.OFPP_LOCAL.getValue())).andReturn(true).anyTimes();
+        expect(mockTopology.isInSameBroadcastDomain(1L, OFPort.OFPP_LOCAL.getValue(),
+                                                    1L, (short)2)).andReturn(true).anyTimes();
+        expect(mockTopology.isInSameBroadcastDomain(1L, (short)2,
+                                                    1L, OFPort.OFPP_LOCAL.getValue())).andReturn(true).anyTimes();
+        expect(mockTopology.isConsistent(anyLong(), anyShort(), anyLong(), anyShort())).andReturn(false).anyTimes();
+
+        Date topologyUpdateTime = new Date();
+        expect(mockTopology.getLastUpdateTime()).andReturn(topologyUpdateTime).
+        anyTimes();
+
+        replay(mockTopology);
+
+        deviceManager.topology = mockTopology;
+
+        Calendar c = Calendar.getInstance();
+        Entity entity1 = new Entity(1L, null, 1, 1L, 1, c.getTime());
+        c.add(Calendar.MILLISECOND,
+              (int)AttachmentPoint.OPENFLOW_TO_EXTERNAL_TIMEOUT/ 2);
+        Entity entity2 = new Entity(1L, null, null, 1L, (int)OFPort.OFPP_LOCAL.getValue(), c.getTime());
+        c.add(Calendar.MILLISECOND,
+              (int)AttachmentPoint.OPENFLOW_TO_EXTERNAL_TIMEOUT + 1);
+        Entity entity3 = new Entity(1L, null, null, 1L, 2, c.getTime());
+
+        IDevice d;
+        SwitchPort[] aps;
+
+        d = deviceManager.learnDeviceByEntity(entity1);
+        assertEquals(1, deviceManager.getAllDevices().size());
+        aps = d.getAttachmentPoints();
+        assertArrayEquals(new SwitchPort[] { new SwitchPort(1L, 1) }, aps);
+
+        // Ensure that the attachment point changes to OFPP_LOCAL
+        d = deviceManager.learnDeviceByEntity(entity2);
+        assertEquals(1, deviceManager.getAllDevices().size());
+        aps = d.getAttachmentPoints();
+        assertArrayEquals(new SwitchPort[] { new SwitchPort(1L, OFPort.OFPP_LOCAL.getValue()) }, aps);
+
+        // Even though the new attachment point is consistent with old
+        // and the time has elapsed, OFPP_LOCAL attachment point should
+        // be maintained.
+        d = deviceManager.learnDeviceByEntity(entity3);
+        assertEquals(1, deviceManager.getAllDevices().size());
+        aps = d.getAttachmentPoints();
+        assertArrayEquals(new SwitchPort[] { new SwitchPort(1L, OFPort.OFPP_LOCAL.getValue()) }, aps);
+    }
+
 
     @Test
     public void testPacketIn() throws Exception {
@@ -985,8 +1085,12 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
      */
     public void doTestEntityExpiration() throws Exception {
         IDeviceListener mockListener =
-                createStrictMock(IDeviceListener.class);
-        mockListener.deviceIPV4AddrChanged(isA(IDevice.class));
+                createMock(IDeviceListener.class);
+        expect(mockListener.getName()).andReturn("mockListener").anyTimes();
+        expect(mockListener.isCallbackOrderingPostreq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
+        expect(mockListener.isCallbackOrderingPrereq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
 
         ITopologyService mockTopology = createMock(ITopologyService.class);
         expect(mockTopology.isAttachmentPointPort(anyLong(),
@@ -1028,8 +1132,12 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         assertTrue(diter.hasNext());
         assertEquals(d.getDeviceKey(), diter.next().getDeviceKey());
 
-
+        replay(mockListener);
         deviceManager.addListener(mockListener);
+        verify(mockListener);
+        reset(mockListener);
+
+        mockListener.deviceIPV4AddrChanged(isA(IDevice.class));
         replay(mockListener);
         deviceManager.entityCleanupTask.reschedule(0, null);
 
@@ -1061,8 +1169,12 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
 
     public void doTestDeviceExpiration() throws Exception {
         IDeviceListener mockListener =
-                createStrictMock(IDeviceListener.class);
-        mockListener.deviceRemoved(isA(IDevice.class));
+                createMock(IDeviceListener.class);
+        expect(mockListener.getName()).andReturn("mockListener").anyTimes();
+        expect(mockListener.isCallbackOrderingPostreq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
+        expect(mockListener.isCallbackOrderingPrereq((String)anyObject(), (String)anyObject()))
+        .andReturn(false).atLeastOnce();
         
         Calendar c = Calendar.getInstance();
         c.add(Calendar.MILLISECOND, -DeviceManagerImpl.ENTITY_TIMEOUT-1);
@@ -1092,7 +1204,12 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
         d = deviceManager.learnDeviceByEntity(entity1);
         assertArrayEquals(new Integer[] { 1, 2 }, d.getIPv4Addresses());
 
+        replay(mockListener);
         deviceManager.addListener(mockListener);
+        verify(mockListener);
+        reset(mockListener);
+
+        mockListener.deviceRemoved(isA(IDevice.class));
         replay(mockListener);
         deviceManager.entityCleanupTask.reschedule(0, null);
 
@@ -1809,7 +1926,8 @@ public class DeviceManagerImplTest extends FloodlightTestCase {
             Entity[] entities = new Entity[] { entity1, entity2,
                                                entity3, entity4
                                              };
-            Device d = new Device(null,1L, null, null, Arrays.asList(entities), null);
+            Device d = new Device(null,1L, null, null, null,
+                                  Arrays.asList(entities), null);
             SwitchPort swp1x1 = new SwitchPort(1L, 1);
             SwitchPort swp1x2 = new SwitchPort(1L, 2);
             SwitchPort swp2x1 = new SwitchPort(2L, 1);

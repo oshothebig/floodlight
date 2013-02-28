@@ -2,6 +2,7 @@
 *.class
 .classpath
 .project
+.settings/
 .pydevproject
 .settings
 .DS_Store
@@ -9,3 +10,4 @@ target
 thrift
 *.swp
 *.pyc
+findbugs-results

@@ -1,3 +1,19 @@
+/**
+ *    Copyright 2013, Big Switch Networks, Inc.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License"); you may
+ *    not use this file except in compliance with the License. You may obtain
+ *    a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ *    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ *    License for the specific language governing permissions and limitations
+ *    under the License.
+ **/
+
 package net.floodlightcontroller.topology;
 
 import java.io.IOException;
@@ -89,7 +105,7 @@ public class TopologyManager implements
     /**
      * set of tunnel links
      */
-    protected Map<NodePortTuple, Set<Link>> tunnelLinks; 
+    protected Set<NodePortTuple> tunnelPorts;
 
     protected ILinkDiscoveryService linkDiscovery;
     protected IThreadPoolService threadPool;
@@ -101,11 +117,11 @@ public class TopologyManager implements
 
     protected BlockingQueue<LDUpdate> ldUpdates;
     protected List<LDUpdate> appliedUpdates;
-    
+
     // These must be accessed using getCurrentInstance(), not directly
     protected TopologyInstance currentInstance;
     protected TopologyInstance currentInstanceWithoutTunnels;
-    
+
     protected SingletonTask newInstanceTask;
     private Date lastUpdateTime;
 
@@ -120,10 +136,33 @@ public class TopologyManager implements
      */
     protected boolean dtLinksUpdated;
 
-    protected final int TOPOLOGY_COMPUTE_INTERVAL_MS = 500;
+    /** Flag that indicates if tunnel ports were updated or not
+     */
+    protected boolean tunnelPortsUpdated;
+
+    protected int TOPOLOGY_COMPUTE_INTERVAL_MS = 500;
+
+   //  Getter/Setter methods
+    /**
+     * Get the time interval for the period topology updates, if any.
+     * The time returned is in milliseconds.
+     * @return
+     */
+    public int getTopologyComputeInterval() {
+        return TOPOLOGY_COMPUTE_INTERVAL_MS;
+    }
 
     /**
-     * Thread for recomputing topology.  The thread is always running, 
+     * Set the time interval for the period topology updates, if any.
+     * The time is in milliseconds.
+     * @return
+     */
+    public void setTopologyComputeInterval(int time_ms) {
+        TOPOLOGY_COMPUTE_INTERVAL_MS = time_ms;
+    }
+
+    /**
+     * Thread for recomputing topology.  The thread is always running,
      * however the function applyUpdates() has a blocking call.
      */
     @LogMessageDoc(level="ERROR",
@@ -137,6 +176,7 @@ public class TopologyManager implements
             try {
                 if (ldUpdates.peek() != null)
                     updateTopology();
+                handleMiscellaneousPeriodicEvents();
             }
             catch (Exception e) {
                 log.error("Error in topology instance task thread", e);
@@ -148,10 +188,16 @@ public class TopologyManager implements
         }
     }
 
+    // To be used for adding any periodic events that's required by topology.
+    protected void handleMiscellaneousPeriodicEvents() {
+        return;
+    }
+
     public boolean updateTopology() {
         boolean newInstanceFlag;
         linksUpdated = false;
         dtLinksUpdated = false;
+        tunnelPortsUpdated = false;
         applyUpdates();
         newInstanceFlag = createNewInstance();
         lastUpdateTime = new Date();
@@ -377,7 +423,8 @@ public class TopologyManager implements
 
     }
 
-
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
     /**
      * Checks if the switchport is a broadcast domain port or not.
      */
@@ -393,7 +440,8 @@ public class TopologyManager implements
         return ti.isBroadcastDomainPort(new NodePortTuple(sw, port));
     }
 
-
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
     /**
      * Checks if the new attachment point port is consistent with the
      * old attachment point port.
@@ -467,6 +515,22 @@ public class TopologyManager implements
         return ti.getAllowedIncomingBroadcastPort(src,srcPort);
     }
 
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    @Override
+    public Set<Long> getSwitchesInOpenflowDomain(long switchDPID) {
+        return getSwitchesInOpenflowDomain(switchDPID, true);
+    }
+
+    @Override
+    public Set<Long> getSwitchesInOpenflowDomain(long switchDPID,
+                                                 boolean tunnelEnabled) {
+        TopologyInstance ti = getCurrentInstance(tunnelEnabled);
+        return ti.getSwitchesInOpenflowDomain(switchDPID);
+    }
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+
     @Override
     public Set<NodePortTuple> getBroadcastDomainPorts() {
         return portBroadcastDomainLinks.keySet();
@@ -474,10 +538,9 @@ public class TopologyManager implements
 
     @Override
     public Set<NodePortTuple> getTunnelPorts() {
-        return tunnelLinks.keySet();
+        return tunnelPorts;
     }
 
-    @Override
     public Set<NodePortTuple> getBlockedPorts() {
         Set<NodePortTuple> bp;
         Set<NodePortTuple> blockedPorts =
@@ -508,28 +571,28 @@ public class TopologyManager implements
     // ***************
 
     @Override
-    public Route getRoute(long src, long dst) {
-        return getRoute(src, dst, true);
+    public Route getRoute(long src, long dst, long cookie) {
+        return getRoute(src, dst, cookie, true);
     }
 
     @Override
-    public Route getRoute(long src, long dst, boolean tunnelEnabled) {
+    public Route getRoute(long src, long dst, long cookie, boolean tunnelEnabled) {
         TopologyInstance ti = getCurrentInstance(tunnelEnabled);
-        return ti.getRoute(src, dst);
+        return ti.getRoute(src, dst, cookie);
     }
 
     @Override
-    public Route getRoute(long src, short srcPort, long dst, short dstPort) {
-        return getRoute(src, srcPort, dst, dstPort, true);
+    public Route getRoute(long src, short srcPort, long dst, short dstPort, long cookie) {
+        return getRoute(src, srcPort, dst, dstPort, cookie, true);
     }
 
     @Override
-    public Route getRoute(long src, short srcPort, long dst, short dstPort, 
+    public Route getRoute(long src, short srcPort, long dst, short dstPort, long cookie, 
                           boolean tunnelEnabled) {
         TopologyInstance ti = getCurrentInstance(tunnelEnabled);
-        return ti.getRoute(src, srcPort, dst, dstPort);
+        return ti.getRoute(src, srcPort, dst, dstPort, cookie);
     }
-
+    
     @Override
     public boolean routeExists(long src, long dst) {
         return routeExists(src, dst, true);
@@ -661,7 +724,7 @@ public class TopologyManager implements
         switchPortLinks = new HashMap<NodePortTuple, Set<Link>>();
         directLinks = new HashMap<NodePortTuple, Set<Link>>();
         portBroadcastDomainLinks = new HashMap<NodePortTuple, Set<Link>>();
-        tunnelLinks = new HashMap<NodePortTuple, Set<Link>>();
+        tunnelPorts = new HashSet<NodePortTuple>();
         topologyAware = new ArrayList<ITopologyListener>();
         ldUpdates = new LinkedBlockingQueue<LDUpdate>();
         appliedUpdates = new ArrayList<LDUpdate>();
@@ -782,6 +845,27 @@ public class TopologyManager implements
         }
     }
 
+    /**
+     * Get the set of ports to eliminate for sending out BDDP.  The method
+     * returns all the ports that are suppressed for link discovery on the
+     * switch.
+     * packets.
+     * @param sid
+     * @return
+     */
+    protected Set<Short> getPortsToEliminateForBDDP(long sid) {
+        Set<NodePortTuple> suppressedNptList = linkDiscovery.getSuppressLLDPsInfo();
+        if (suppressedNptList == null) return null;
+
+        Set<Short> resultPorts = new HashSet<Short>();
+        for(NodePortTuple npt: suppressedNptList) {
+            if (npt.getNodeId() == sid) {
+                resultPorts.add(npt.getPortId());
+            }
+        }
+
+        return resultPorts;
+    }
 
     /**
      * The BDDP packets are forwarded out of all the ports out of an
@@ -828,6 +912,11 @@ public class TopologyManager implements
                         ports.remove(p);
                     }
                 }
+            }
+
+            Set<Short> portsToEliminate = getPortsToEliminateForBDDP(sid);
+            if (portsToEliminate != null) {
+                ports.removeAll(portsToEliminate);
             }
 
             // remove the incoming switch port
@@ -896,10 +985,26 @@ public class TopologyManager implements
             } else if (update.getOperation() == UpdateOperation.LINK_REMOVED){
                 removeLink(update.getSrc(), update.getSrcPort(), 
                            update.getDst(), update.getDstPort());
+            } else if (update.getOperation() == UpdateOperation.TUNNEL_PORT_ADDED) {
+                addTunnelPort(update.getSrc(), update.getSrcPort());
+            } else if (update.getOperation() == UpdateOperation.TUNNEL_PORT_REMOVED) {
+                removeTunnelPort(update.getSrc(), update.getSrcPort());
             }
             // Add to the list of applied updates.
             appliedUpdates.add(update);
         }
+    }
+
+    public void addTunnelPort(long sw, short port) {
+        NodePortTuple npt = new NodePortTuple(sw, port);
+        tunnelPorts.add(npt);
+        tunnelPortsUpdated = true;
+    }
+
+    public void removeTunnelPort(long sw, short port) {
+        NodePortTuple npt = new NodePortTuple(sw, port);
+        tunnelPorts.remove(npt);
+        tunnelPortsUpdated = true;
     }
 
     /**
@@ -944,7 +1049,7 @@ public class TopologyManager implements
         }
 
         // Remove all tunnel links.
-        for(NodePortTuple npt: tunnelLinks.keySet()) {
+        for(NodePortTuple npt: tunnelPorts) {
             if (switchPortLinks.get(npt) == null) continue;
             for(Link link: switchPortLinks.get(npt)) {
                 removeLinkFromStructure(openflowLinks, link);
@@ -955,7 +1060,7 @@ public class TopologyManager implements
                                                    blockedPorts,
                                                    openflowLinks, 
                                                    broadcastDomainPorts,
-                                                   tunnelLinks.keySet());
+                                                   tunnelPorts);
         nt.compute();
         // We set the instances with and without tunnels to be identical.
         // If needed, we may compute them differently.
@@ -1126,44 +1231,40 @@ public class TopologyManager implements
         return result1 || result2;
     }
 
+    protected void addOrUpdateTunnelLink(long srcId, short srcPort, long dstId,
+                                    short dstPort) {
+        // If you need to handle tunnel links, this is a placeholder.
+    }
+
     public void addOrUpdateLink(long srcId, short srcPort, long dstId, 
                                 short dstPort, LinkType type) {
-        boolean flag1 = false, flag2 = false;
-
         Link link = new Link(srcId, srcPort, dstId, dstPort);
-        addPortToSwitch(srcId, srcPort);
-        addPortToSwitch(dstId, dstPort);
-
-        addLinkToStructure(switchPortLinks, link);
 
         if (type.equals(LinkType.MULTIHOP_LINK)) {
+            addPortToSwitch(srcId, srcPort);
+            addPortToSwitch(dstId, dstPort);
+            addLinkToStructure(switchPortLinks, link);
+
             addLinkToStructure(portBroadcastDomainLinks, link);
-            flag1 = removeLinkFromStructure(tunnelLinks, link);
-            flag2 = removeLinkFromStructure(directLinks, link);
-            dtLinksUpdated = flag1 || flag2;
-        } else if (type.equals(LinkType.TUNNEL)) {
-            addLinkToStructure(tunnelLinks, link);
-            removeLinkFromStructure(portBroadcastDomainLinks, link);
-            removeLinkFromStructure(directLinks, link);
-            dtLinksUpdated = true;
+            dtLinksUpdated = removeLinkFromStructure(directLinks, link);
+            linksUpdated = true;
         } else if (type.equals(LinkType.DIRECT_LINK)) {
+            addPortToSwitch(srcId, srcPort);
+            addPortToSwitch(dstId, dstPort);
+            addLinkToStructure(switchPortLinks, link);
+
             addLinkToStructure(directLinks, link);
-            removeLinkFromStructure(tunnelLinks, link);
             removeLinkFromStructure(portBroadcastDomainLinks, link);
             dtLinksUpdated = true;
+            linksUpdated = true;
+        } else if (type.equals(LinkType.TUNNEL)) {
+            addOrUpdateTunnelLink(srcId, srcPort, dstId, dstPort);
         }
-        linksUpdated = true;
     }
 
     public void removeLink(Link link)  {
-        boolean flag1 = false, flag2 = false;
-
-        flag1 = removeLinkFromStructure(directLinks, link);
-        flag2 = removeLinkFromStructure(tunnelLinks, link);
-
         linksUpdated = true;
-        dtLinksUpdated = flag1 || flag2;
-
+        dtLinksUpdated = removeLinkFromStructure(directLinks, link);
         removeLinkFromStructure(portBroadcastDomainLinks, link);
         removeLinkFromStructure(switchPortLinks, link);
 
@@ -1201,9 +1302,9 @@ public class TopologyManager implements
 
     public void clear() {
         switchPorts.clear();
+        tunnelPorts.clear();
         switchPortLinks.clear();
         portBroadcastDomainLinks.clear();
-        tunnelLinks.clear();
         directLinks.clear();
         appliedUpdates.clear();
     }
@@ -1216,6 +1317,7 @@ public class TopologyManager implements
         this.clear();
         linksUpdated = true;
         dtLinksUpdated = true;
+        tunnelPortsUpdated = true;
         createNewInstance();
         lastUpdateTime = new Date();
     }
@@ -1262,5 +1364,16 @@ public class TopologyManager implements
 
         ports.addAll(ofpList);
         return ports;
+    }
+
+    @Override
+    public ArrayList<Route> getRoutes(long srcDpid, long dstDpid,
+                                      boolean tunnelEnabled) {
+        // Floodlight supports single path routing now
+        
+        // return single path now
+        ArrayList<Route> result=new ArrayList<Route>();
+        result.add(getRoute(srcDpid, dstDpid, 0, tunnelEnabled));
+        return result;
     }
 }

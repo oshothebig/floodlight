@@ -1,3 +1,19 @@
+/**
+ *    Copyright 2013, Big Switch Networks, Inc.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License"); you may
+ *    not use this file except in compliance with the License. You may obtain
+ *    a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ *    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ *    License for the specific language governing permissions and limitations
+ *    under the License.
+ **/
+
 package net.floodlightcontroller.topology;
 
 import java.util.ArrayList;
@@ -421,7 +437,7 @@ public class TopologyInstance {
         return broadcastDomainPorts.contains(npt);
     }
 
-    class NodeDist implements Comparable<NodeDist> {
+    protected class NodeDist implements Comparable<NodeDist> {
         private Long node;
         public Long getNode() {
             return node;
@@ -461,6 +477,12 @@ public class TopologyInstance {
             } else if (!node.equals(other.node))
                 return false;
             return true;
+        }
+
+        @Override
+        public int hashCode() {
+            assert false : "hashCode not designed";
+            return 42;
         }
 
         private TopologyInstance getOuterType() {
@@ -652,7 +674,7 @@ public class TopologyInstance {
     }
 
     protected Route getRoute(long srcId, short srcPort,
-                             long dstId, short dstPort) {
+                             long dstId, short dstPort, long cookie) {
 
 
         // Return null the route source and desitnation are the
@@ -662,7 +684,7 @@ public class TopologyInstance {
 
         List<NodePortTuple> nptList;
         NodePortTuple npt;
-        Route r = getRoute(srcId, dstId);
+        Route r = getRoute(srcId, dstId, 0);
         if (r == null && srcId != dstId) return null;
 
         if (r != null) {
@@ -680,7 +702,7 @@ public class TopologyInstance {
         return r;
     }
 
-    protected Route getRoute(long srcId, long dstId) {
+    protected Route getRoute(long srcId, long dstId, long cookie) {
         RouteId id = new RouteId(srcId, dstId);
         Route result = null;
         if (pathcache.containsKey(id)) {
@@ -727,7 +749,13 @@ public class TopologyInstance {
 
     protected Set<Long> getSwitchesInOpenflowDomain(long switchId) {
         Cluster c = switchClusterMap.get(switchId);
-        if (c == null) return null;
+        if (c == null) {
+            // The switch is not known to topology as there
+            // are no links connected to it.
+            Set<Long> nodes = new HashSet<Long>();
+            nodes.add(switchId);
+            return nodes;
+        }
         return (c.getNodes());
     }
 

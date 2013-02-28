@@ -20,6 +20,8 @@ package net.floodlightcontroller.linkdiscovery;
 import java.util.Map;
 import java.util.Set;
 
+import org.openflow.protocol.OFPacketOut;
+
 import net.floodlightcontroller.core.module.IFloodlightService;
 import net.floodlightcontroller.routing.Link;
 import net.floodlightcontroller.topology.NodePortTuple;
@@ -44,6 +46,15 @@ public interface ILinkDiscoveryService extends IFloodlightService {
      * @return
      */
     public ILinkDiscovery.LinkType getLinkType(Link lt, LinkInfo info);
+
+    /**
+     * Returns OFPacketOut which contains the LLDP data corresponding
+     * to switchport (sw, port). PacketOut does not contain actions.
+     * PacketOut length includes the minimum length and data length.
+     */
+    public OFPacketOut generateLLDPMessage(long sw, short port,
+                                           boolean isStandard,
+                                           boolean isReverse);
 
     /**
      * Returns an unmodifiable map from switch id to a set of all links with it 
@@ -87,4 +98,20 @@ public interface ILinkDiscoveryService extends IFloodlightService {
      * @param autoPortFastFeature
      */
     public void setAutoPortFastFeature(boolean autoPortFastFeature);
+
+    /**
+     * Get the map of node-port tuples from link DB
+     */
+    public Map<NodePortTuple, Set<Link>> getPortLinks();
+
+    /**
+     * Add a MAC address range to ignore list. All packet ins from this range
+     * will be dropped
+     * @param mac The base MAC address that is to be ignored
+     * @param ignoreBits The number of LSBs to ignore. A value of 0 will add
+     *        only one MAC address 'mac' to ignore list. A value of 48 will add
+     *        ALL MAC addresses to the ignore list. This will cause a drop of
+     *        ALL packet ins.
+     */
+    public void addMACToIgnoreList(long mac, int ignoreBits);
 }

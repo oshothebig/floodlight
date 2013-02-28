@@ -234,6 +234,9 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule {
             while ((iSrcDaps < srcDaps.length) && (iDstDaps < dstDaps.length)) {
                 SwitchPort srcDap = srcDaps[iSrcDaps];
                 SwitchPort dstDap = dstDaps[iDstDaps];
+
+                // srcCluster and dstCluster here cannot be null as
+                // every switch will be at least in its own L2 domain.
                 Long srcCluster = 
                         topology.getL2DomainId(srcDap.getSwitchDPID());
                 Long dstCluster = 
@@ -241,14 +244,12 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule {
 
                 int srcVsDest = srcCluster.compareTo(dstCluster);
                 if (srcVsDest == 0) {
-                    if (!srcDap.equals(dstDap) && 
-                        (srcCluster != null) && 
-                        (dstCluster != null)) {
+                    if (!srcDap.equals(dstDap)) {
                         Route route = 
                                 routingEngine.getRoute(srcDap.getSwitchDPID(),
                                                        (short)srcDap.getPort(),
                                                        dstDap.getSwitchDPID(),
-                                                       (short)dstDap.getPort());
+                                                       (short)dstDap.getPort(), 0); //cookie = 0, i.e., default route
                         if (route != null) {
                             if (log.isTraceEnabled()) {
                                 log.trace("pushRoute match={} route={} " + 
@@ -343,13 +344,11 @@ public class Forwarding extends ForwardingBase implements IFloodlightModule {
 
         // set buffer-id, in-port and packet-data based on packet-in
         short poLength = (short)(po.getActionsLength() + OFPacketOut.MINIMUM_LENGTH);
-        po.setBufferId(pi.getBufferId());
+        po.setBufferId(OFPacketOut.BUFFER_ID_NONE);
         po.setInPort(pi.getInPort());
-        if (pi.getBufferId() == OFPacketOut.BUFFER_ID_NONE) {
-            byte[] packetData = pi.getPacketData();
-            poLength += packetData.length;
-            po.setPacketData(packetData);
-        }
+        byte[] packetData = pi.getPacketData();
+        poLength += packetData.length;
+        po.setPacketData(packetData);
         po.setLength(poLength);
         
         try {

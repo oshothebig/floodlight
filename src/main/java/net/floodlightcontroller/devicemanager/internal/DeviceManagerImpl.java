@@ -47,6 +47,7 @@ import net.floodlightcontroller.core.IFloodlightProviderService.Role;
 import net.floodlightcontroller.core.module.FloodlightModuleContext;
 import net.floodlightcontroller.core.module.IFloodlightModule;
 import net.floodlightcontroller.core.module.IFloodlightService;
+import net.floodlightcontroller.core.util.ListenerDispatcher;
 import net.floodlightcontroller.core.util.SingletonTask;
 import net.floodlightcontroller.devicemanager.IDevice;
 import net.floodlightcontroller.devicemanager.IDeviceService;
@@ -61,8 +62,12 @@ import net.floodlightcontroller.flowcache.IFlowReconcileService;
 import net.floodlightcontroller.flowcache.OFMatchReconcile;
 import net.floodlightcontroller.linkdiscovery.ILinkDiscovery.LDUpdate;
 import net.floodlightcontroller.packet.ARP;
+import net.floodlightcontroller.packet.DHCP;
+import net.floodlightcontroller.packet.DHCPOption;
 import net.floodlightcontroller.packet.Ethernet;
 import net.floodlightcontroller.packet.IPv4;
+import net.floodlightcontroller.packet.UDP;
+import net.floodlightcontroller.packet.DHCP.DHCPOptionCode;
 import net.floodlightcontroller.restserver.IRestApiService;
 import net.floodlightcontroller.storage.IStorageSourceService;
 import net.floodlightcontroller.threadpool.IThreadPoolService;
@@ -75,6 +80,7 @@ DeviceManagerImpl.DeviceUpdate.Change.*;
 import org.openflow.protocol.OFMatchWithSwDpid;
 import org.openflow.protocol.OFMessage;
 import org.openflow.protocol.OFPacketIn;
+import org.openflow.protocol.OFPort;
 import org.openflow.protocol.OFType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -192,8 +198,10 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
 
     /**
      * Device manager event listeners
+     * reclassifyDeviceListeners are notified first before reconcileDeviceListeners.
+     * This is to make sure devices are correctly reclassified before reconciliation.
      */
-    protected Set<IDeviceListener> deviceListeners;
+    protected ListenerDispatcher<String,IDeviceListener> deviceListeners;
 
     /**
      * A device update event to be dispatched
@@ -253,8 +261,8 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
 
         @Override
         public int compare(AttachmentPoint oldAP, AttachmentPoint newAP) {
-
             //First compare based on L2 domain ID; 
+
             long oldSw = oldAP.getSw();
             short oldPort = oldAP.getPort();
             long oldDomain = topology.getL2DomainId(oldSw);
@@ -267,6 +275,16 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
 
             if (oldDomain < newDomain) return -1;
             else if (oldDomain > newDomain) return 1;
+
+
+            // Give preference to OFPP_LOCAL always
+            if (oldPort != OFPort.OFPP_LOCAL.getValue() &&
+                    newPort == OFPort.OFPP_LOCAL.getValue()) {
+                return -1;
+            } else if (oldPort == OFPort.OFPP_LOCAL.getValue() &&
+                    newPort != OFPort.OFPP_LOCAL.getValue()) {
+                return 1;
+            }
 
             // We expect that the last seen of the new AP is higher than
             // old AP, if it is not, just reverse and send the negative
@@ -509,7 +527,21 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
 
     @Override
     public void addListener(IDeviceListener listener) {
-        deviceListeners.add(listener);
+         deviceListeners.addListener("device", listener);
+         logListeners();
+    }
+
+    private void logListeners() {
+        List<IDeviceListener> listeners = deviceListeners.getOrderedListeners();
+        if (listeners != null) {
+            StringBuffer sb = new StringBuffer();
+            sb.append("DeviceListeners: ");
+            for (IDeviceListener l : listeners) {
+                sb.append(l.getName());
+                sb.append(",");
+            }
+            logger.debug(sb.toString());
+        }
     }
 
     // *************
@@ -659,7 +691,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                 new HashSet<EnumSet<DeviceField>>();
         addIndex(true, EnumSet.of(DeviceField.IPV4));
 
-        this.deviceListeners = new HashSet<IDeviceListener>();
+        this.deviceListeners = new ListenerDispatcher<String, IDeviceListener>();
         this.suppressAPs = Collections.newSetFromMap(
                                new ConcurrentHashMap<SwitchPort, Boolean>());
 
@@ -777,7 +809,35 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
                         new Object[] { pi, sw.getStringId(), pi.getInPort(), eth,
                         srcDevice, dstDevice });
        }
+
+        snoopDHCPClientName(eth, srcDevice);
+
         return Command.CONTINUE;
+    }
+
+    /**
+     * Snoop and record client-provided host name from DHCP requests
+     * @param eth
+     * @param srcDevice
+     */
+    private void snoopDHCPClientName(Ethernet eth, Device srcDevice) {
+        if (eth.getEtherType() != Ethernet.TYPE_IPv4)
+            return;
+        IPv4 ipv4 = (IPv4) eth.getPayload();
+        if (ipv4.getProtocol() != IPv4.PROTOCOL_UDP)
+            return;
+        UDP udp = (UDP) ipv4.getPayload();
+        if (!(udp.getPayload() instanceof DHCP))
+            return;
+        DHCP dhcp = (DHCP) udp.getPayload();
+        byte opcode = dhcp.getOpCode();
+        if (opcode == DHCP.OPCODE_REQUEST) {
+            DHCPOption dhcpOption = dhcp.getOption(
+                    DHCPOptionCode.OptionCode_Hostname);
+            if (dhcpOption != null) {
+                srcDevice.dhcpClientName = new String(dhcpOption.getData());
+            }
+        }
     }
 
     /**
@@ -1269,39 +1329,47 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
             if (logger.isTraceEnabled()) {
                 logger.trace("Dispatching device update: {}", update);
             }
-            for (IDeviceListener listener : deviceListeners) {
-                switch (update.change) {
-                    case ADD:
-                        listener.deviceAdded(update.device);
-                        break;
-                    case DELETE:
-                        listener.deviceRemoved(update.device);
-                        break;
-                    case CHANGE:
-                        for (DeviceField field : update.fieldsChanged) {
-                            switch (field) {
-                                case IPV4:
-                                    listener.deviceIPV4AddrChanged(update.device);
-                                    break;
-                                case SWITCH:
-                                case PORT:
-                                    //listener.deviceMoved(update.device);
-                                    break;
-                                case VLAN:
-                                    listener.deviceVlanChanged(update.device);
-                                    break;
-                                default:
-                                    logger.debug("Unknown device field changed {}",
-                                                update.fieldsChanged.toString());
-                                    break;
-                            }
+            List<IDeviceListener> listeners = deviceListeners.getOrderedListeners();
+            notifyListeners(listeners, update);
+        }
+    }
+
+    protected void notifyListeners(List<IDeviceListener> listeners, DeviceUpdate update) {
+        if (listeners == null) {
+            return;
+        }
+        for (IDeviceListener listener : listeners) {
+            switch (update.change) {
+                case ADD:
+                    listener.deviceAdded(update.device);
+                    break;
+                case DELETE:
+                    listener.deviceRemoved(update.device);
+                    break;
+                case CHANGE:
+                    for (DeviceField field : update.fieldsChanged) {
+                        switch (field) {
+                            case IPV4:
+                                listener.deviceIPV4AddrChanged(update.device);
+                                break;
+                            case SWITCH:
+                            case PORT:
+                                //listener.deviceMoved(update.device);
+                                break;
+                            case VLAN:
+                                listener.deviceVlanChanged(update.device);
+                                break;
+                            default:
+                                logger.debug("Unknown device field changed {}",
+                                            update.fieldsChanged.toString());
+                                break;
                         }
-                        break;
-                }
+                    }
+                    break;
             }
         }
     }
-    
+
     /**
      * Check if the entity e has all the keyFields set. Returns false if not
      * @param e entity to check 
@@ -1466,6 +1534,7 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
 
                 if (toKeep.size() > 0) {
                     Device newDevice = allocateDevice(d.getDeviceKey(),
+                                                      d.getDHCPClientName(),
                                                       d.oldAPs,
                                                       d.attachmentPoints,
                                                       toKeep,
@@ -1584,11 +1653,13 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
 
     // TODO: FIX THIS.
     protected Device allocateDevice(Long deviceKey,
+                                    String dhcpClientName,
                                     List<AttachmentPoint> aps,
                                     List<AttachmentPoint> trueAPs,
                                     Collection<Entity> entities,
                                     IEntityClass entityClass) {
-        return new Device(this, deviceKey, aps, trueAPs, entities, entityClass);
+        return new Device(this, deviceKey, dhcpClientName, aps, trueAPs,
+                          entities, entityClass);
     }
 
     protected Device allocateDevice(Device device,
@@ -1619,8 +1690,9 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
         }
         if (newAPs.isEmpty())
             newAPs = null;
-        Device d = new Device(this, device.getDeviceKey(),newAPs, null,
-                        entities, device.getEntityClass());
+        Device d = new Device(this, device.getDeviceKey(),
+                              device.getDHCPClientName(), newAPs, null,
+                              entities, device.getEntityClass());
         d.updateAttachmentPoint();
         return d;
     }
@@ -1666,8 +1738,11 @@ IFlowReconcileListener, IInfoProvider, IHAListener {
      * @param updates the updates to process.
      */
     protected void sendDeviceMovedNotification(Device d) {
-        for (IDeviceListener listener : deviceListeners) {
-            listener.deviceMoved(d);
+        List<IDeviceListener> listeners = deviceListeners.getOrderedListeners();
+        if (listeners != null) {
+            for (IDeviceListener listener : listeners) {
+                listener.deviceMoved(d);
+            }
         }
     }
     

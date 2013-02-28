@@ -1,3 +1,19 @@
+/**
+ *    Copyright 2013, Big Switch Networks, Inc.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License"); you may
+ *    not use this file except in compliance with the License. You may obtain
+ *    a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ *    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ *    License for the specific language governing permissions and limitations
+ *    under the License.
+ **/
+
 package net.floodlightcontroller.core.internal;
 
 import java.io.IOException;
@@ -187,7 +203,7 @@ public class RoleChanger {
     @LogMessageDoc(level="ERROR",
                    message="RoleRequestWorker task had an uncaught exception.",
                    explanation="An unknown occured while processing an HA " +
-                   		"role change event.",
+                               "role change event.",
                    recommendation=LogMessageDoc.GENERIC_ACTION)                              
     protected class RoleRequestWorker extends Thread  {
         @Override
@@ -278,7 +294,7 @@ public class RoleChanger {
             message="Failed to send role request message " + 
                     "to switch {switch}: {message}. Disconnecting",
             explanation="An I/O error occurred while attempting to change " +
-            		"the switch HA role.",
+                        "the switch HA role.",
             recommendation=LogMessageDoc.CHECK_SWITCH)                              
     protected void sendRoleRequest(Collection<IOFSwitch> switches,
                                    Role role, long cookie) {
@@ -290,7 +306,9 @@ public class RoleChanger {
                     = pendingRequestMap.get(sw);
                 if (pendingList == null) {
                     pendingList = new LinkedList<PendingRoleRequestEntry>();
-                    pendingRequestMap.put(sw, pendingList);
+                    LinkedList<PendingRoleRequestEntry> r = 
+                            pendingRequestMap.putIfAbsent(sw, pendingList);
+                    if (r != null) pendingList = r;
                 }
                 int xid = sendHARoleRequest(sw, role, cookie);
                 PendingRoleRequestEntry entry =
@@ -331,7 +349,7 @@ public class RoleChanger {
             message="Timeout while waiting for role reply from switch {switch}."
                     + " Disconnecting",
             explanation="Timed out waiting for the switch to respond to " +
-            		"a request to change the HA role.",
+                        "a request to change the HA role.",
             recommendation=LogMessageDoc.CHECK_SWITCH)                              
     protected void verifyRoleReplyReceived(Collection<IOFSwitch> switches,
                                    long cookie) {
@@ -425,8 +443,11 @@ public class RoleChanger {
      * @return 
      */
     public boolean checkFirstPendingRoleRequestXid (IOFSwitch sw, int xid) {
-        LinkedList<PendingRoleRequestEntry> pendingRoleRequests =
-                pendingRequestMap.get(sw);
+        LinkedList<PendingRoleRequestEntry> pendingRoleRequests;
+        if (sw == null) {
+            return false;
+        }
+        pendingRoleRequests = pendingRequestMap.get(sw);
         if (pendingRoleRequests == null) {
             return false;
         }

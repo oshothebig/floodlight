@@ -1,3 +1,19 @@
+/**
+ *    Copyright 2013, Big Switch Networks, Inc.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License"); you may
+ *    not use this file except in compliance with the License. You may obtain
+ *    a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ *    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ *    License for the specific language governing permissions and limitations
+ *    under the License.
+ **/
+
 package net.floodlightcontroller.flowcache;
 
 import static org.easymock.EasyMock.*;
@@ -8,7 +24,6 @@ import java.util.ListIterator;
 
 import net.floodlightcontroller.core.IListener.Command;
 import net.floodlightcontroller.core.module.FloodlightModuleContext;
-import net.floodlightcontroller.core.test.MockFloodlightProvider;
 import net.floodlightcontroller.core.test.MockThreadPoolService;
 import net.floodlightcontroller.counter.ICounterStoreService;
 import net.floodlightcontroller.counter.SimpleCounter;
@@ -27,7 +42,6 @@ import org.openflow.protocol.OFType;
 
 public class FlowReconcileMgrTest extends FloodlightTestCase {
 
-    protected MockFloodlightProvider mockFloodlightProvider;
     protected FlowReconcileManager flowReconcileMgr;
     protected MockThreadPoolService threadPool;
     protected ICounterStoreService counterStore;
@@ -117,7 +131,7 @@ public class FlowReconcileMgrTest extends FloodlightTestCase {
         flowReconcileMgr.addFlowReconcileListener(r3);
         
         int pre_flowReconcileThreadRunCount =
-                flowReconcileMgr.flowReconcileThreadRunCount;
+                flowReconcileMgr.flowReconcileThreadRunCount.get();
         Date startTime = new Date();
         OFMatchReconcile ofmRcIn = new OFMatchReconcile();
         try {
@@ -147,11 +161,11 @@ public class FlowReconcileMgrTest extends FloodlightTestCase {
         }).anyTimes();
         
         pre_flowReconcileThreadRunCount =
-            flowReconcileMgr.flowReconcileThreadRunCount;
+            flowReconcileMgr.flowReconcileThreadRunCount.get();
         startTime = new Date();
         replay(r1, r2, r3);
         flowReconcileMgr.reconcileFlow(ofmRcIn);
-        while (flowReconcileMgr.flowReconcileThreadRunCount <=
+        while (flowReconcileMgr.flowReconcileThreadRunCount.get() <=
                 pre_flowReconcileThreadRunCount) {
             Thread.sleep(10);
             Date currTime = new Date();
@@ -174,12 +188,12 @@ public class FlowReconcileMgrTest extends FloodlightTestCase {
         }).anyTimes();
         
         pre_flowReconcileThreadRunCount =
-            flowReconcileMgr.flowReconcileThreadRunCount;
+            flowReconcileMgr.flowReconcileThreadRunCount.get();
         startTime = new Date();
         
         replay(r1, r2, r3);
         flowReconcileMgr.reconcileFlow(ofmRcIn);
-        while (flowReconcileMgr.flowReconcileThreadRunCount <=
+        while (flowReconcileMgr.flowReconcileThreadRunCount.get() <=
                 pre_flowReconcileThreadRunCount) {
             Thread.sleep(10);
             Date currTime = new Date();
@@ -197,12 +211,12 @@ public class FlowReconcileMgrTest extends FloodlightTestCase {
         .andReturn(Command.STOP).times(1);
         
         pre_flowReconcileThreadRunCount =
-            flowReconcileMgr.flowReconcileThreadRunCount;
+            flowReconcileMgr.flowReconcileThreadRunCount.get();
         startTime = new Date();
         
         replay(r1, r2, r3);
         flowReconcileMgr.reconcileFlow(ofmRcIn);
-        while (flowReconcileMgr.flowReconcileThreadRunCount <=
+        while (flowReconcileMgr.flowReconcileThreadRunCount.get() <=
                 pre_flowReconcileThreadRunCount) {
             Thread.sleep(10);
             Date currTime = new Date();
@@ -227,11 +241,11 @@ public class FlowReconcileMgrTest extends FloodlightTestCase {
         .andReturn(Command.STOP).times(1);
         
         pre_flowReconcileThreadRunCount =
-            flowReconcileMgr.flowReconcileThreadRunCount;
+            flowReconcileMgr.flowReconcileThreadRunCount.get();
         startTime = new Date();
         replay(r1, r2, r3);
         flowReconcileMgr.reconcileFlow(ofmRcIn);
-        while (flowReconcileMgr.flowReconcileThreadRunCount <=
+        while (flowReconcileMgr.flowReconcileThreadRunCount.get() <=
                 pre_flowReconcileThreadRunCount) {
             Thread.sleep(10);
             Date currTime = new Date();

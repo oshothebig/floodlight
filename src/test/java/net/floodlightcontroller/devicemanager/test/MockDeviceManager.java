@@ -1,10 +1,24 @@
+/**
+ *    Copyright 2013, Big Switch Networks, Inc.
+ *
+ *    Licensed under the Apache License, Version 2.0 (the "License"); you may
+ *    not use this file except in compliance with the License. You may obtain
+ *    a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ *    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ *    License for the specific language governing permissions and limitations
+ *    under the License.
+ **/
+
 package net.floodlightcontroller.devicemanager.test;
 
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Date;
 import java.util.List;
-import java.util.Set;
 
 import net.floodlightcontroller.devicemanager.IDevice;
 import net.floodlightcontroller.devicemanager.IDeviceListener;
@@ -47,9 +61,9 @@ public class MockDeviceManager extends DeviceManagerImpl {
                                Integer ipv4Address, Long switchDPID, 
                                Integer switchPort,
                                boolean processUpdates) {
-        Set<IDeviceListener> listeners = deviceListeners;
+        List<IDeviceListener> listeners = deviceListeners.getOrderedListeners();
         if (!processUpdates) {
-            deviceListeners = Collections.<IDeviceListener>emptySet();
+            deviceListeners.clearListeners();
         }
         
         if (vlan != null && vlan.shortValue() <= 0)
@@ -59,7 +73,12 @@ public class MockDeviceManager extends DeviceManagerImpl {
         IDevice res =  learnDeviceByEntity(new Entity(macAddress, vlan, 
                                                       ipv4Address, switchDPID, 
                                                       switchPort, new Date()));
-        deviceListeners = listeners;
+        // Restore listeners
+        if (listeners != null) {
+            for (IDeviceListener listener : listeners) {
+                deviceListeners.addListener("device", listener);
+            }
+        }
         return res;
     }
     
@@ -93,6 +112,7 @@ public class MockDeviceManager extends DeviceManagerImpl {
     
     @Override
     protected Device allocateDevice(Long deviceKey,
+                                    String dhcpClientName,
                                     List<AttachmentPoint> aps,
                                     List<AttachmentPoint> trueAPs,
                                     Collection<Entity> entities,
