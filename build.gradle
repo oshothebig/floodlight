@@ -1,0 +1,28 @@
+// ant.importBuild 'build.xml'
+
+apply plugin: 'java'
+
+repositories {
+    mavenCentral()
+    maven {
+        url 'http://maven.restlet.org'
+    }
+}
+
+dependencies {
+    compile 'ch.qos.logback:logback-classic:1.0.0'
+    compile 'ch.qos.logback:logback-core:1.0.0'
+    compile 'org.codehaus.jackson:jackson-mapper-asl:1.8.6'
+    //  restlet
+    compile 'org.restlet.jse:org.restlet:2.1-RC1'
+    compile 'org.restlet.jse:org.restlet.ext.jackson:2.1-RC1'
+    compile 'org.restlet.jse:org.restlet.ext.simple:2.1-RC1'
+    compile 'org.restlet.jse:org.restlet.ext.slf4j:2.1-RC1'
+    compile 'org.simpleframework:simple:4.1.21'
+    compile 'org.jboss.netty:netty:3.2.6.Final'
+    compile 'args4j:args4j:2.0.16'
+    compile 'com.googlecode.concurrentlinkedhashmap:concurrentlinkedhashmap-lru:1.2'
+    compile 'org.python:jython-standalone:2.5.2'
+    compile 'org.apache.thrift:libthrift:0.7.0'
+    compile 'com.google.guava:guava:13.0.1'
+}
